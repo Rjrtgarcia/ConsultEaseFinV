@@ -37,14 +37,21 @@ The following libraries need to be installed via the Arduino Library Manager:
 
 1. Install the required libraries in Arduino IDE
 2. Copy the `User_Setup.h` file to the `libraries/TFT_eSPI` folder to configure the display
-3. Open `faculty_desk_unit.ino` in Arduino IDE
-4. Modify the configuration section at the top of the sketch:
-   - Update WiFi credentials
-   - Set the MQTT broker address to your Raspberry Pi IP
-   - Update the BLE beacon MAC address for the faculty member
-   - Set the faculty ID to match the database record
-   - Adjust faculty name as needed
+3. Open `config.h` and update the following settings:
+   - WiFi credentials (`WIFI_SSID` and `WIFI_PASSWORD`)
+   - MQTT server IP address (`MQTT_SERVER`)
+   - Faculty ID (`FACULTY_ID`) - This should match the faculty ID in the database
+   - Faculty name (`FACULTY_NAME`) - This should match the faculty name in the database
+4. Open `faculty_desk_unit.ino` in Arduino IDE
 5. Compile and upload to your ESP32
+
+### BLE Beacon Configuration
+
+1. Open the `ble_beacon/config.h` file and update the following settings:
+   - Faculty ID (`FACULTY_ID`) - This should match the faculty ID in the database
+   - Faculty name (`FACULTY_NAME`) - This should match the faculty name in the database
+2. Open `ble_beacon/ble_beacon.ino` in Arduino IDE
+3. Compile and upload to a separate ESP32 device that will serve as the faculty's BLE beacon
 
 ## Usage
 
@@ -63,10 +70,54 @@ The following libraries need to be installed via the Arduino Library Manager:
 
 ## Advanced Settings
 
-You can modify these parameters in the sketch:
+You can modify these parameters in the `config.h` file:
 
-- `BLE_SCAN_INTERVAL`: Time between BLE scans (seconds)
+- `BLE_SCAN_INTERVAL`: Time between BLE scans (milliseconds)
 - `BLE_SCAN_DURATION`: Duration of each BLE scan (seconds)
 - `BLE_RSSI_THRESHOLD`: Signal strength threshold for presence detection
-- `BLE_TIMEOUT`: Time before marking faculty as away (seconds)
-- `MAX_REQUESTS`: Maximum number of consultation requests to display 
+- `TFT_ROTATION`: Display rotation (0=Portrait, 1=Landscape, 2=Inverted Portrait, 3=Inverted Landscape)
+- Various color settings for the UI theme
+
+## Integration with Central System
+
+The Faculty Desk Unit communicates with the central system via MQTT. The central system publishes consultation requests to the following topics:
+
+- `consultease/faculty/{faculty_id}/requests` - Main topic for consultation requests
+- `professor/messages` - Alternative topic for backward compatibility
+
+The Faculty Desk Unit publishes faculty status updates to:
+
+- `consultease/faculty/{faculty_id}/status` - Faculty status updates
+- `professor/status` - Alternative topic for backward compatibility
+
+When the BLE beacon is detected, the Faculty Desk Unit publishes a status update with `keychain_connected` or `keychain_disconnected` message, which the central system uses to update the faculty status in the database.
+
+## MQTT Message Format
+
+### Consultation Request (from Central System to Faculty Desk Unit)
+```json
+{
+  "message": "Student: Alice Johnson\nCourse: CS101\nRequest: Need help with assignment",
+  "student_name": "Alice Johnson",
+  "course_code": "CS101",
+  "consultation_id": 123,
+  "timestamp": "2025-05-02T09:46:02"
+}
+```
+
+### Status Update (from Faculty Desk Unit to Central System)
+```json
+{
+  "status": true,
+  "faculty_id": 1
+}
+```
+
+or
+
+```json
+{
+  "keychain_connected": true,
+  "faculty_id": 1
+}
+```

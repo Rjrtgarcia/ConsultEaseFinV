@@ -32,6 +32,12 @@ class FacultyController:
             self.handle_faculty_status_update
         )
 
+        # Subscribe to faculty desk unit status updates
+        self.mqtt_service.register_topic_handler(
+            "professor/status",
+            self.handle_faculty_status_update
+        )
+
         # Connect MQTT service
         if not self.mqtt_service.is_connected:
             self.mqtt_service.connect()
@@ -71,18 +77,60 @@ class FacultyController:
 
         Args:
             topic (str): MQTT topic
-            data (dict): Status update data
+            data (dict or str): Status update data
         """
-        # Extract faculty ID from topic (e.g., "consultease/faculty/123/status")
-        parts = topic.split('/')
-        if len(parts) != 4:
-            logger.error(f"Invalid topic format: {topic}")
+        faculty_id = None
+        status = None
+
+        # Handle different topic formats
+        if topic == "professor/status":
+            # This is from the faculty desk unit
+            # Check if this is a string message (keychain_connected or keychain_disconnected)
+            if isinstance(data, str):
+                if data == "keychain_connected":
+                    status = True
+                    # Use faculty ID from the client ID (DeskUnit_Jeysibn)
+                    # For now, we'll use faculty ID 1 as default
+                    faculty_id = 1
+                    logger.info(f"BLE beacon connected for faculty desk unit (ID: {faculty_id})")
+                elif data == "keychain_disconnected":
+                    status = False
+                    # Use faculty ID from the client ID (DeskUnit_Jeysibn)
+                    # For now, we'll use faculty ID 1 as default
+                    faculty_id = 1
+                    logger.info(f"BLE beacon disconnected for faculty desk unit (ID: {faculty_id})")
+            else:
+                # This is a JSON message
+                status = data.get('status', False)
+                faculty_id = data.get('faculty_id', 1)  # Default to faculty ID 1
+        else:
+            # Extract faculty ID from topic (e.g., "consultease/faculty/123/status")
+            parts = topic.split('/')
+            if len(parts) != 4:
+                logger.error(f"Invalid topic format: {topic}")
+                return
+
+            try:
+                faculty_id = int(parts[2])
+            except ValueError:
+                logger.error(f"Invalid faculty ID in topic: {parts[2]}")
+                return
+
+            # Get status from data
+            status = data.get('status', False)
+
+            # Check if this is a BLE beacon status update
+            if 'keychain_connected' in data:
+                status = True
+                logger.info(f"BLE beacon connected for faculty {faculty_id}")
+            elif 'keychain_disconnected' in data:
+                status = False
+                logger.info(f"BLE beacon disconnected for faculty {faculty_id}")
+
+        # If we couldn't determine faculty ID or status, return
+        if faculty_id is None or status is None:
+            logger.error(f"Could not determine faculty ID or status from topic {topic} and data {data}")
             return
-
-        faculty_id = int(parts[2])
-
-        # Get status from data
-        status = data.get('status', False)
 
         logger.info(f"Received status update for faculty {faculty_id}: {status}")
 
@@ -92,6 +140,19 @@ class FacultyController:
         if faculty:
             # Notify callbacks
             self._notify_callbacks(faculty)
+
+            # Publish a notification about faculty availability
+            try:
+                notification = {
+                    'type': 'faculty_status',
+                    'faculty_id': faculty.id,
+                    'faculty_name': faculty.name,
+                    'status': status,
+                    'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
+                }
+                self.mqtt_service.publish('consultease/system/notifications', notification)
+            except Exception as e:
+                logger.error(f"Error publishing faculty status notification: {str(e)}")
 
     def update_faculty_status(self, faculty_id, status):
         """
@@ -176,6 +237,30 @@ class FacultyController:
             return faculty
         except Exception as e:
             logger.error(f"Error getting faculty by ID: {str(e)}")
+            return None
+
+    def get_faculty_by_ble_id(self, ble_id):
+        """
+        Get a faculty member by BLE ID.
+
+        Args:
+            ble_id (str): BLE beacon ID
+
+        Returns:
+            Faculty: Faculty object or None if not found
+        """
+        try:
+            db = get_db()
+            faculty = db.query(Faculty).filter(Faculty.ble_id == ble_id).first()
+
+            if faculty:
+                logger.info(f"Found faculty with BLE ID {ble_id}: {faculty.name} (ID: {faculty.id})")
+            else:
+                logger.warning(f"No faculty found with BLE ID: {ble_id}")
+
+            return faculty
+        except Exception as e:
+            logger.error(f"Error getting faculty by BLE ID: {str(e)}")
             return None
 
     def add_faculty(self, name, department, email, ble_id, image_path=None):
@@ -312,3 +397,45 @@ class FacultyController:
         except Exception as e:
             logger.error(f"Error deleting faculty: {str(e)}")
             return False
+
+    def ensure_available_faculty(self):
+        """
+        Ensure at least one faculty member is available for testing.
+        If no faculty is available, make Dr. John Smith available.
+
+        Returns:
+            Faculty: The available faculty member or None if error
+        """
+        try:
+            db = get_db()
+
+            # Check if any faculty is available
+            available_faculty = db.query(Faculty).filter(Faculty.status == True).first()
+
+            if available_faculty:
+                logger.info(f"Found available faculty: {available_faculty.name} (ID: {available_faculty.id})")
+                return available_faculty
+
+            # If no faculty is available, make Dr. John Smith available
+            dr_john = db.query(Faculty).filter(Faculty.name == "Dr. John Smith").first()
+
+            if dr_john:
+                logger.info(f"Making Dr. John Smith (ID: {dr_john.id}) available for testing")
+                dr_john.status = True
+                db.commit()
+                return dr_john
+
+            # If Dr. John Smith doesn't exist, make the first faculty available
+            first_faculty = db.query(Faculty).first()
+
+            if first_faculty:
+                logger.info(f"Making {first_faculty.name} (ID: {first_faculty.id}) available for testing")
+                first_faculty.status = True
+                db.commit()
+                return first_faculty
+
+            logger.warning("No faculty found in the database")
+            return None
+        except Exception as e:
+            logger.error(f"Error ensuring available faculty: {str(e)}")
+            return None

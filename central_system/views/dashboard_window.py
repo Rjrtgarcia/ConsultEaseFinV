@@ -343,6 +343,12 @@ class DashboardWindow(BaseWindow):
         self.refresh_timer.timeout.connect(self.refresh_faculty_status)
         self.refresh_timer.start(30000)  # Refresh every 30 seconds
 
+        # Log student info for debugging
+        if student:
+            logger.info(f"Dashboard initialized with student: ID={student.id}, Name={student.name}, RFID={student.rfid_uid}")
+        else:
+            logger.warning("Dashboard initialized without student information")
+
     def init_ui(self):
         """
         Initialize the dashboard UI.
@@ -590,3 +596,32 @@ class DashboardWindow(BaseWindow):
             QMessageBox.warning(self, "Error", message)
         else:
             QMessageBox.information(self, "Information", message)
+
+    def simulate_consultation_request(self):
+        """
+        Simulate a consultation request for testing purposes.
+        This method finds an available faculty and shows the consultation form.
+        """
+        try:
+            # Import faculty controller
+            from ..controllers import FacultyController
+
+            # Get faculty controller
+            faculty_controller = FacultyController()
+
+            # Get available faculty
+            available_faculty = faculty_controller.get_all_faculty(filter_available=True)
+
+            if available_faculty:
+                # Use the first available faculty
+                faculty = available_faculty[0]
+                logger.info(f"Simulating consultation request with faculty: {faculty.name}")
+
+                # Show the consultation form
+                self.show_consultation_form(faculty)
+            else:
+                logger.warning("No available faculty found for simulation")
+                self.show_notification("No available faculty found. Please try again later.", "error")
+        except Exception as e:
+            logger.error(f"Error simulating consultation request: {str(e)}")
+            self.show_notification("Error simulating consultation request", "error")

@@ -109,14 +109,25 @@ class ConsultEaseApp:
         # Ensure default admin exists
         self.admin_controller.ensure_default_admin()
 
-        # Make Dr. John Smith available for testing
-        self._ensure_dr_john_smith_available()
-
         # Initialize windows
         self.login_window = None
         self.dashboard_window = None
         self.admin_login_window = None
         self.admin_dashboard_window = None
+
+        # Start controllers
+        logger.info("Starting RFID controller")
+        self.rfid_controller.start()
+        self.rfid_controller.register_callback(self.handle_rfid_scan)
+
+        logger.info("Starting faculty controller")
+        self.faculty_controller.start()
+
+        logger.info("Starting consultation controller")
+        self.consultation_controller.start()
+
+        # Make sure at least one faculty is available for testing
+        self._ensure_dr_john_smith_available()
 
         # Current student
         self.current_student = None
@@ -124,11 +135,6 @@ class ConsultEaseApp:
         # Initialize transition manager
         self.transition_manager = WindowTransitionManager(duration=300)
         logger.info("Initialized window transition manager")
-
-        # Start controllers
-        logger.info("Starting RFID controller")
-        self.rfid_controller.start()
-        self.rfid_controller.register_callback(self.handle_rfid_scan)
 
         # Verify RFID controller is properly initialized
         try:
@@ -145,12 +151,6 @@ class ConsultEaseApp:
             logger.error(f"Error verifying RFID service: {str(e)}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
-
-        logger.info("Starting faculty controller")
-        self.faculty_controller.start()
-
-        logger.info("Starting consultation controller")
-        self.consultation_controller.start()
 
         # Connect cleanup method
         self.app.aboutToQuit.connect(self.cleanup)
@@ -187,21 +187,15 @@ class ConsultEaseApp:
         Make sure Dr. John Smith is available for testing.
         """
         try:
-            from central_system.models import Faculty, get_db
+            # Use the faculty controller to ensure at least one faculty is available
+            available_faculty = self.faculty_controller.ensure_available_faculty()
 
-            db = get_db()
-            # Find Dr. John Smith by name
-            faculty = db.query(Faculty).filter(Faculty.name == "Dr. John Smith").first()
-
-            if faculty:
-                logger.info(f"Found Dr. John Smith (ID: {faculty.id}), setting status to available")
-                faculty.status = True
-                db.commit()
-                logger.info("Dr. John Smith is now available for testing")
+            if available_faculty:
+                logger.info(f"Ensured faculty availability: {available_faculty.name} (ID: {available_faculty.id}) is now available")
             else:
-                logger.warning("Dr. John Smith not found in the database")
+                logger.warning("Could not ensure faculty availability")
         except Exception as e:
-            logger.error(f"Error making Dr. John Smith available: {str(e)}")
+            logger.error(f"Error ensuring faculty availability: {str(e)}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
 
@@ -494,29 +488,26 @@ class ConsultEaseApp:
 
         logger.info(f"Consultation requested with: {faculty_name}")
 
-        # Create consultation request
-        consultation = {
-            'student_id': self.current_student.id,
-            'faculty_id': faculty_id,
-            'message': message,
-            'course_code': course_code,
-            'status': 'pending'
-        }
-
-        # Add to database
-        success = self.consultation_controller.add_consultation(consultation)
+        # Create consultation request using the correct method
+        consultation = self.consultation_controller.create_consultation(
+            student_id=self.current_student.id,
+            faculty_id=faculty_id,
+            request_message=message,
+            course_code=course_code
+        )
 
         # Show success/error message
-        if success:
-            self.dashboard_window.show_notification(
-                f"Consultation request sent to {faculty_name}",
-                "success"
-            )
+        if consultation:
+            logger.info(f"Successfully created consultation request: {consultation.id}")
+            # No need to show notification as DashboardWindow already shows a message box
         else:
-            self.dashboard_window.show_notification(
-                "Failed to send consultation request. Please try again.",
-                "error"
-            )
+            logger.error("Failed to create consultation request")
+            # Show error message if the dashboard window has a show_notification method
+            if hasattr(self.dashboard_window, 'show_notification'):
+                self.dashboard_window.show_notification(
+                    "Failed to send consultation request. Please try again.",
+                    "error"
+                )
 
     def handle_faculty_updated(self):
         """
@@ -602,12 +593,9 @@ if __name__ == "__main__":
     # Set the theme to light as per the technical context document
     os.environ['CONSULTEASE_THEME'] = 'light'
 
-    # Use PostgreSQL for production
-    os.environ['DB_TYPE'] = 'postgresql'
-    os.environ['DB_USER'] = 'piuser'  # Update with your PostgreSQL username
-    os.environ['DB_PASSWORD'] = 'password'  # Update with your PostgreSQL password
-    os.environ['DB_HOST'] = 'localhost'
-    os.environ['DB_NAME'] = 'consultease'
+    # Use SQLite for development and testing
+    os.environ['DB_TYPE'] = 'sqlite'
+    os.environ['DB_PATH'] = 'consultease.db'  # SQLite database file
 
     # Check if we're running in fullscreen mode
     fullscreen = os.environ.get('CONSULTEASE_FULLSCREEN', 'false').lower() == 'true'
