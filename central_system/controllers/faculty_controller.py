@@ -198,6 +198,15 @@ class FacultyController:
                 logger.error(f"Faculty not found: {faculty_id}")
                 return None
 
+            # If faculty is set to always available, don't change status to unavailable
+            if faculty.always_available and not status:
+                logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) is set to always available, ignoring unavailable status update")
+                # Still update last_seen timestamp
+                faculty.last_seen = datetime.datetime.now()
+                db.commit()
+                return faculty
+
+            # Otherwise, update status normally
             faculty.status = status
             faculty.last_seen = datetime.datetime.now()
 
@@ -288,7 +297,7 @@ class FacultyController:
             logger.error(f"Error getting faculty by BLE ID: {str(e)}")
             return None
 
-    def add_faculty(self, name, department, email, ble_id, image_path=None):
+    def add_faculty(self, name, department, email, ble_id, image_path=None, always_available=False):
         """
         Add a new faculty member.
 
@@ -298,6 +307,7 @@ class FacultyController:
             email (str): Faculty email
             ble_id (str): Faculty BLE beacon ID
             image_path (str, optional): Path to faculty image
+            always_available (bool, optional): Whether the faculty is always available
 
         Returns:
             Faculty: New faculty object or None if error
@@ -324,7 +334,8 @@ class FacultyController:
                 email=email,
                 ble_id=ble_id,
                 image_path=image_path,
-                status=False
+                status=always_available,  # If always available, set initial status to True
+                always_available=always_available
             )
 
             db.add(faculty)
@@ -332,12 +343,27 @@ class FacultyController:
 
             logger.info(f"Added new faculty: {faculty.name} (ID: {faculty.id})")
 
+            # If faculty is set to always available, publish a status update
+            if always_available:
+                logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) is set to always available")
+                try:
+                    notification = {
+                        'type': 'faculty_status',
+                        'faculty_id': faculty.id,
+                        'faculty_name': faculty.name,
+                        'status': True,
+                        'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
+                    }
+                    self.mqtt_service.publish('consultease/system/notifications', notification)
+                except Exception as e:
+                    logger.error(f"Error publishing faculty status notification: {str(e)}")
+
             return faculty
         except Exception as e:
             logger.error(f"Error adding faculty: {str(e)}")
             return None
 
-    def update_faculty(self, faculty_id, name=None, department=None, email=None, ble_id=None, image_path=None):
+    def update_faculty(self, faculty_id, name=None, department=None, email=None, ble_id=None, image_path=None, always_available=None):
         """
         Update an existing faculty member.
 
@@ -348,6 +374,7 @@ class FacultyController:
             email (str, optional): New faculty email
             ble_id (str, optional): New faculty BLE beacon ID
             image_path (str, optional): New faculty image path
+            always_available (bool, optional): Whether the faculty is always available
 
         Returns:
             Faculty: Updated faculty object or None if error
@@ -385,6 +412,34 @@ class FacultyController:
 
             if image_path is not None:
                 faculty.image_path = image_path
+
+            # Update always_available flag if provided
+            if always_available is not None and always_available != faculty.always_available:
+                old_always_available = faculty.always_available
+                faculty.always_available = always_available
+
+                # If changing to always available, set status to True
+                if always_available and not faculty.status:
+                    faculty.status = True
+                    logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) set to always available, status updated to Available")
+
+                    # Publish status update
+                    try:
+                        notification = {
+                            'type': 'faculty_status',
+                            'faculty_id': faculty.id,
+                            'faculty_name': faculty.name,
+                            'status': True,
+                            'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
+                        }
+                        self.mqtt_service.publish('consultease/system/notifications', notification)
+                    except Exception as e:
+                        logger.error(f"Error publishing faculty status notification: {str(e)}")
+
+                # If changing from always available to not always available, don't change status
+                # The status will be updated based on BLE beacon events
+                if old_always_available and not always_available:
+                    logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) no longer always available, status will be updated based on BLE beacon events")
 
             db.commit()
 

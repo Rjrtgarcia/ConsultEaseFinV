@@ -17,6 +17,7 @@ class Faculty(Base):
     ble_id = Column(String, unique=True, index=True)
     image_path = Column(String, nullable=True)  # Path to faculty image
     status = Column(Boolean, default=False)  # False = Unavailable, True = Available
+    always_available = Column(Boolean, default=False)  # If True, faculty is always shown as available
     last_seen = Column(DateTime, default=func.now())
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -36,6 +37,7 @@ class Faculty(Base):
             "ble_id": self.ble_id,
             "image_path": self.image_path,
             "status": self.status,
+            "always_available": self.always_available,
             "last_seen": self.last_seen.isoformat() if self.last_seen else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None

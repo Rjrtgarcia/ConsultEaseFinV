@@ -176,8 +176,8 @@ class FacultyManagementTab(QWidget):
 
         # Faculty table
         self.faculty_table = QTableWidget()
-        self.faculty_table.setColumnCount(6)
-        self.faculty_table.setHorizontalHeaderLabels(["ID", "Name", "Department", "Email", "BLE ID", "Status"])
+        self.faculty_table.setColumnCount(7)
+        self.faculty_table.setHorizontalHeaderLabels(["ID", "Name", "Department", "Email", "BLE ID", "Status", "Always Available"])
         self.faculty_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.faculty_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.faculty_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -220,6 +220,12 @@ class FacultyManagementTab(QWidget):
                     status_item.setBackground(Qt.red)
                 self.faculty_table.setItem(row_position, 5, status_item)
 
+                # Add always available status
+                always_available_item = QTableWidgetItem("Yes" if faculty.always_available else "No")
+                if faculty.always_available:
+                    always_available_item.setBackground(Qt.green)
+                self.faculty_table.setItem(row_position, 6, always_available_item)
+
         except Exception as e:
             logger.error(f"Error refreshing faculty data: {str(e)}")
             QMessageBox.warning(self, "Data Error", f"Failed to refresh faculty data: {str(e)}")
@@ -261,8 +267,11 @@ class FacultyManagementTab(QWidget):
                 else:
                     image_path = None
 
+                # Get always available flag
+                always_available = dialog.always_available_checkbox.isChecked()
+
                 # Add faculty using controller
-                faculty = self.faculty_controller.add_faculty(name, department, email, ble_id, image_path)
+                faculty = self.faculty_controller.add_faculty(name, department, email, ble_id, image_path, always_available)
 
                 if faculty:
                     QMessageBox.information(self, "Add Faculty", f"Faculty '{name}' added successfully.")
@@ -301,6 +310,7 @@ class FacultyManagementTab(QWidget):
         dialog.department_input.setText(faculty.department)
         dialog.email_input.setText(faculty.email)
         dialog.ble_id_input.setText(faculty.ble_id)
+        dialog.always_available_checkbox.setChecked(faculty.always_available)
 
         # Set image path if available
         if faculty.image_path:
@@ -340,9 +350,12 @@ class FacultyManagementTab(QWidget):
                     # Keep the existing image path
                     image_path = faculty.image_path
 
+                # Get always available flag
+                always_available = dialog.always_available_checkbox.isChecked()
+
                 # Update faculty using controller
                 updated_faculty = self.faculty_controller.update_faculty(
-                    faculty_id, name, department, email, ble_id, image_path
+                    faculty_id, name, department, email, ble_id, image_path, always_available
                 )
 
                 if updated_faculty:
@@ -434,6 +447,11 @@ class FacultyDialog(QDialog):
         # BLE ID input
         self.ble_id_input = QLineEdit()
         form_layout.addRow("BLE ID:", self.ble_id_input)
+
+        # Always available checkbox
+        self.always_available_checkbox = QCheckBox("Always Available (BLE Always On)")
+        self.always_available_checkbox.setToolTip("If checked, this faculty member will always be shown as available, regardless of BLE status")
+        form_layout.addRow("", self.always_available_checkbox)
 
         # Image selection
         image_layout = QHBoxLayout()
