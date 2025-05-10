@@ -41,7 +41,9 @@ from central_system.views.login_window import create_keyboard_setup_script
 # Import utilities
 from central_system.utils import (
     install_keyboard_handler,
-    apply_stylesheet
+    apply_stylesheet,
+    WindowTransition,
+    TransitionType
 )
 # Import icons module separately to avoid early QPixmap creation
 from central_system.utils import icons
@@ -209,7 +211,9 @@ class ConsultEaseApp:
 
     def show_login_window(self):
         """
-        Show the login window.
+        Show the login window without transition.
+        This is used for initial window display only.
+        For transitions between windows, use _transition_to_login_window.
         """
         if self.login_window is None:
             self.login_window = LoginWindow()
@@ -231,8 +235,20 @@ class ConsultEaseApp:
 
     def show_dashboard_window(self, student=None):
         """
-        Show the dashboard window.
+        Show the dashboard window without transition.
+        For transitions between windows, use _transition_to_dashboard_window.
         """
+        # If we have a visible window, use transition instead
+        current_window = None
+        if self.login_window and self.login_window.isVisible():
+            current_window = self.login_window
+
+        if current_window:
+            # Use transition if we have a current window
+            self._transition_to_dashboard_window(current_window, student, TransitionType.SLIDE_LEFT)
+            return
+
+        # Otherwise, show directly without transition
         self.current_student = student
 
         if self.dashboard_window is None:
@@ -262,8 +278,20 @@ class ConsultEaseApp:
 
     def show_admin_login_window(self):
         """
-        Show the admin login window.
+        Show the admin login window without transition.
+        For transitions between windows, use _transition_to_admin_login_window.
         """
+        # If we have a visible window, use transition instead
+        current_window = None
+        if self.login_window and self.login_window.isVisible():
+            current_window = self.login_window
+
+        if current_window:
+            # Use transition if we have a current window
+            self._transition_to_admin_login_window(current_window, TransitionType.SLIDE_UP)
+            return
+
+        # Otherwise, show directly without transition
         if self.admin_login_window is None:
             self.admin_login_window = AdminLoginWindow()
             self.admin_login_window.admin_authenticated.connect(self.handle_admin_authenticated)
@@ -292,8 +320,20 @@ class ConsultEaseApp:
 
     def show_admin_dashboard_window(self, admin=None):
         """
-        Show the admin dashboard window.
+        Show the admin dashboard window without transition.
+        For transitions between windows, use _transition_to_admin_dashboard_window.
         """
+        # If we have a visible window, use transition instead
+        current_window = None
+        if self.admin_login_window and self.admin_login_window.isVisible():
+            current_window = self.admin_login_window
+
+        if current_window:
+            # Use transition if we have a current window
+            self._transition_to_admin_dashboard_window(current_window, admin, TransitionType.SLIDE_LEFT)
+            return
+
+        # Otherwise, show directly without transition
         if self.admin_dashboard_window is None:
             self.admin_dashboard_window = AdminDashboardWindow(admin)
             self.admin_dashboard_window.change_window.connect(self.handle_window_change)
@@ -342,8 +382,15 @@ class ConsultEaseApp:
         # Store the current student
         self.current_student = student
 
-        # Show the dashboard window
-        self.show_dashboard_window(student)
+        # Get current window for transition
+        current_window = self.login_window if self.login_window and self.login_window.isVisible() else None
+
+        # Show the dashboard window with transition
+        if current_window:
+            self._transition_to_dashboard_window(current_window, student, TransitionType.SLIDE_LEFT)
+        else:
+            # Fallback to direct show if no current window
+            self.show_dashboard_window(student)
 
     def handle_admin_authenticated(self, credentials):
         """
@@ -365,7 +412,16 @@ class ConsultEaseApp:
                 'id': admin.id,
                 'username': admin.username
             }
-            self.show_admin_dashboard_window(admin_info)
+
+            # Get current window for transition
+            current_window = self.admin_login_window if self.admin_login_window and self.admin_login_window.isVisible() else None
+
+            # Show the admin dashboard window with transition
+            if current_window:
+                self._transition_to_admin_dashboard_window(current_window, admin_info, TransitionType.SLIDE_LEFT)
+            else:
+                # Fallback to direct show if no current window
+                self.show_admin_dashboard_window(admin_info)
         else:
             logger.warning(f"Admin authentication failed: {username}")
             if self.admin_login_window:
@@ -466,16 +522,161 @@ class ConsultEaseApp:
             window_name (str): Name of window to show
             data (any): Optional data to pass to the window
         """
+        # Determine the current active window
+        current_window = None
+        if self.login_window and self.login_window.isVisible():
+            current_window = self.login_window
+        elif self.dashboard_window and self.dashboard_window.isVisible():
+            current_window = self.dashboard_window
+        elif self.admin_login_window and self.admin_login_window.isVisible():
+            current_window = self.admin_login_window
+        elif self.admin_dashboard_window and self.admin_dashboard_window.isVisible():
+            current_window = self.admin_dashboard_window
+
+        # Determine transition type based on navigation flow
+        transition_type = TransitionType.FADE  # Default transition
+
+        # Student flow: login -> dashboard -> login
+        if window_name == "dashboard" and current_window == self.login_window:
+            transition_type = TransitionType.SLIDE_LEFT
+        elif window_name == "login" and current_window == self.dashboard_window:
+            transition_type = TransitionType.SLIDE_RIGHT
+
+        # Admin flow: login -> admin_login -> admin_dashboard -> login
+        elif window_name == "admin_login" and current_window == self.login_window:
+            transition_type = TransitionType.SLIDE_UP
+        elif window_name == "admin_dashboard" and current_window == self.admin_login_window:
+            transition_type = TransitionType.SLIDE_LEFT
+        elif window_name == "login" and (current_window == self.admin_login_window or
+                                        current_window == self.admin_dashboard_window):
+            transition_type = TransitionType.SLIDE_DOWN
+
+        # Show the requested window
         if window_name == "login":
-            self.show_login_window()
+            self._transition_to_login_window(current_window, transition_type)
         elif window_name == "dashboard":
-            self.show_dashboard_window(data)
+            self._transition_to_dashboard_window(current_window, data, transition_type)
         elif window_name == "admin_login":
-            self.show_admin_login_window()
+            self._transition_to_admin_login_window(current_window, transition_type)
         elif window_name == "admin_dashboard":
-            self.show_admin_dashboard_window(data)
+            self._transition_to_admin_dashboard_window(current_window, data, transition_type)
         else:
             logger.warning(f"Unknown window: {window_name}")
+
+    def _transition_to_login_window(self, current_window, transition_type=TransitionType.FADE):
+        """
+        Transition to the login window with animation.
+
+        Args:
+            current_window: The currently visible window
+            transition_type: Type of transition to use
+        """
+        if self.login_window is None:
+            self.login_window = LoginWindow()
+            self.login_window.student_authenticated.connect(self.handle_student_authenticated)
+            self.login_window.change_window.connect(self.handle_window_change)
+
+        # Prepare the login window but don't show it yet
+        self.login_window.setWindowOpacity(0.0)
+
+        # Perform the transition
+        WindowTransition.transition(current_window, self.login_window, transition_type)
+
+        # Force fullscreen after transition
+        QTimer.singleShot(350, lambda: self.login_window.showFullScreen())
+
+    def _transition_to_dashboard_window(self, current_window, student=None, transition_type=TransitionType.FADE):
+        """
+        Transition to the dashboard window with animation.
+
+        Args:
+            current_window: The currently visible window
+            student: Student data to display
+            transition_type: Type of transition to use
+        """
+        self.current_student = student
+
+        if self.dashboard_window is None:
+            self.dashboard_window = DashboardWindow(student)
+            self.dashboard_window.change_window.connect(self.handle_window_change)
+            self.dashboard_window.consultation_requested.connect(self.handle_consultation_request)
+        else:
+            # Update student info if needed
+            self.dashboard_window.student = student
+
+        # Populate faculty grid
+        faculties = self.faculty_controller.get_all_faculty()
+        self.dashboard_window.populate_faculty_grid(faculties)
+
+        # Prepare the dashboard window but don't show it yet
+        self.dashboard_window.setWindowOpacity(0.0)
+
+        # Perform the transition
+        WindowTransition.transition(current_window, self.dashboard_window, transition_type)
+
+        # Force fullscreen after transition
+        QTimer.singleShot(350, lambda: self.dashboard_window.showFullScreen())
+
+        # Log that we've shown the dashboard
+        logger.info(f"Showing dashboard for student: {student.name if student else 'Unknown'}")
+
+    def _transition_to_admin_login_window(self, current_window, transition_type=TransitionType.FADE):
+        """
+        Transition to the admin login window with animation.
+
+        Args:
+            current_window: The currently visible window
+            transition_type: Type of transition to use
+        """
+        if self.admin_login_window is None:
+            self.admin_login_window = AdminLoginWindow()
+            self.admin_login_window.admin_authenticated.connect(self.handle_admin_authenticated)
+            self.admin_login_window.change_window.connect(self.handle_window_change)
+
+        # Prepare the admin login window but don't show it yet
+        self.admin_login_window.setWindowOpacity(0.0)
+
+        # Perform the transition
+        WindowTransition.transition(current_window, self.admin_login_window, transition_type)
+
+        # Force fullscreen after transition
+        QTimer.singleShot(350, lambda: self.admin_login_window.showFullScreen())
+
+        # Force the keyboard to show after transition
+        QTimer.singleShot(400, lambda: self._show_keyboard_for_admin_login())
+
+    def _show_keyboard_for_admin_login(self):
+        """Show keyboard for admin login after transition."""
+        if self.keyboard_handler:
+            logger.info("Forcing keyboard to show for admin login window")
+            self.keyboard_handler.force_show_keyboard()
+
+        # Focus the username input to trigger the keyboard
+        QTimer.singleShot(100, lambda: self.admin_login_window.username_input.setFocus())
+
+    def _transition_to_admin_dashboard_window(self, current_window, admin=None, transition_type=TransitionType.FADE):
+        """
+        Transition to the admin dashboard window with animation.
+
+        Args:
+            current_window: The currently visible window
+            admin: Admin data to display
+            transition_type: Type of transition to use
+        """
+        if self.admin_dashboard_window is None:
+            self.admin_dashboard_window = AdminDashboardWindow(admin)
+            self.admin_dashboard_window.change_window.connect(self.handle_window_change)
+            self.admin_dashboard_window.faculty_updated.connect(self.handle_faculty_updated)
+            self.admin_dashboard_window.student_updated.connect(self.handle_student_updated)
+
+        # Prepare the admin dashboard window but don't show it yet
+        self.admin_dashboard_window.setWindowOpacity(0.0)
+
+        # Perform the transition
+        WindowTransition.transition(current_window, self.admin_dashboard_window, transition_type)
+
+        # Force fullscreen after transition
+        QTimer.singleShot(350, lambda: self.admin_dashboard_window.showFullScreen())
 
 if __name__ == "__main__":
     # Configure logging
