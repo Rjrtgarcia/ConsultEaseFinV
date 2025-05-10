@@ -217,23 +217,53 @@ class LoginWindow(BaseWindow):
 
         # Force the keyboard to show up for manual RFID entry
         try:
+            # Get the keyboard handler from the main application
+            keyboard_handler = None
+            try:
+                # Try to get the keyboard handler from the main application
+                from PyQt5.QtWidgets import QApplication
+                main_app = QApplication.instance()
+                if hasattr(main_app, 'keyboard_handler'):
+                    keyboard_handler = main_app.keyboard_handler
+                    self.logger.info("Found keyboard handler in main application")
+            except Exception as e:
+                self.logger.error(f"Error getting keyboard handler: {str(e)}")
+
             # Focus the RFID input field to trigger the keyboard
             self.rfid_input.setFocus()
 
-            # Try to explicitly show the keyboard using DBus
-            import subprocess
-            import sys
-            if sys.platform.startswith('linux'):
-                try:
-                    # Try to use dbus-send to force the keyboard
-                    cmd = [
-                        "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
-                        "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
-                    ]
-                    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    self.logger.info("Sent dbus command to show squeekboard")
-                except Exception as e:
-                    self.logger.error(f"Error showing keyboard: {str(e)}")
+            # Make sure the input field has the keyboard property set
+            self.rfid_input.setProperty("keyboardOnFocus", True)
+
+            # Try to force show the keyboard using the handler
+            if keyboard_handler:
+                self.logger.info("Using keyboard handler to force show keyboard")
+                # Try multiple times with delays to ensure it appears
+                keyboard_handler.force_show_keyboard()
+
+                # Schedule another attempt after a short delay
+                QTimer.singleShot(500, keyboard_handler.force_show_keyboard)
+            else:
+                # Fallback to direct DBus call
+                self.logger.info("No keyboard handler found, using direct DBus call")
+                import subprocess
+                import sys
+                if sys.platform.startswith('linux'):
+                    try:
+                        # Try to use dbus-send to force the keyboard with multiple attempts
+                        cmd = [
+                            "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
+                            "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
+                        ]
+                        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        self.logger.info("Sent dbus command to show squeekboard")
+
+                        # Try again after a delay
+                        QTimer.singleShot(500, lambda: subprocess.Popen(cmd,
+                                                                      stdout=subprocess.DEVNULL,
+                                                                      stderr=subprocess.DEVNULL))
+                    except Exception as e:
+                        self.logger.error(f"Error showing keyboard: {str(e)}")
         except Exception as e:
             self.logger.error(f"Error focusing RFID input: {str(e)}")
 
@@ -505,7 +535,7 @@ def create_keyboard_setup_script():
     This should be called when deploying the application.
     """
     script_content = """#!/bin/bash
-# Setup script for ConsultEase virtual keyboard
+# Enhanced setup script for ConsultEase virtual keyboard
 echo "Setting up ConsultEase virtual keyboard..."
 
 # Ensure squeekboard is installed
@@ -515,24 +545,68 @@ if ! command -v squeekboard &> /dev/null; then
     sudo apt install -y squeekboard
 fi
 
-# Ensure squeekboard service is enabled
+# Ensure dbus-x11 is installed for dbus-send command
+if ! command -v dbus-send &> /dev/null; then
+    echo "dbus-send not found, installing dbus-x11 package..."
+    sudo apt update
+    sudo apt install -y dbus-x11
+fi
+
+# Ensure squeekboard service is enabled and running
+echo "Configuring squeekboard service..."
 systemctl --user enable squeekboard.service
 systemctl --user restart squeekboard.service
 
+# Wait for service to start
+sleep 2
+
+# Check if service is running
+if systemctl --user is-active squeekboard.service; then
+    echo "Squeekboard service is running"
+else
+    echo "Warning: Squeekboard service failed to start. Will try alternative methods."
+    # Try starting squeekboard directly
+    nohup squeekboard > /dev/null 2>&1 &
+fi
+
 # Set environment variables for proper keyboard operation
+echo "Setting up environment variables..."
+mkdir -p ~/.config/environment.d/
 cat > ~/.config/environment.d/consultease.conf << EOF
 # ConsultEase keyboard environment variables
 GDK_BACKEND=wayland,x11
 QT_QPA_PLATFORM=wayland;xcb
 SQUEEKBOARD_FORCE=1
 CONSULTEASE_KEYBOARD_DEBUG=true
+MOZ_ENABLE_WAYLAND=1
+QT_IM_MODULE=wayland
+CLUTTER_IM_MODULE=wayland
 EOF
 
-echo "Creating keyboard trigger script..."
+# Also add to .bashrc for immediate effect
+if ! grep -q "SQUEEKBOARD_FORCE" ~/.bashrc; then
+    echo "Adding environment variables to .bashrc..."
+    cat >> ~/.bashrc << EOF
+
+# ConsultEase keyboard environment variables
+export GDK_BACKEND=wayland,x11
+export QT_QPA_PLATFORM=wayland;xcb
+export SQUEEKBOARD_FORCE=1
+export CONSULTEASE_KEYBOARD_DEBUG=true
+export MOZ_ENABLE_WAYLAND=1
+export QT_IM_MODULE=wayland
+export CLUTTER_IM_MODULE=wayland
+EOF
+fi
+
+# Create keyboard management scripts
+echo "Creating keyboard management scripts..."
+
+# Create keyboard toggle script
 cat > ~/keyboard-toggle.sh << EOF
 #!/bin/bash
 # Toggle squeekboard visibility
-if dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.GetVisible | grep -q "boolean true"; then
+if dbus-send --print-reply --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.GetVisible | grep -q "boolean true"; then
     dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:false
     echo "Keyboard hidden"
 else
@@ -542,8 +616,101 @@ fi
 EOF
 chmod +x ~/keyboard-toggle.sh
 
-echo "Setup complete! Reboot your system for changes to take effect."
-echo "If the keyboard still doesn't appear, run ~/keyboard-toggle.sh to manually show it"
+# Create keyboard show script
+cat > ~/keyboard-show.sh << EOF
+#!/bin/bash
+# Force show squeekboard
+dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
+echo "Keyboard shown"
+EOF
+chmod +x ~/keyboard-show.sh
+
+# Create keyboard hide script
+cat > ~/keyboard-hide.sh << EOF
+#!/bin/bash
+# Force hide squeekboard
+dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:false
+echo "Keyboard hidden"
+EOF
+chmod +x ~/keyboard-hide.sh
+
+# Create keyboard status script
+cat > ~/keyboard-status.sh << EOF
+#!/bin/bash
+# Check squeekboard status
+echo "Squeekboard service status:"
+systemctl --user status squeekboard.service
+
+echo -e "\\nSqueekboard visibility:"
+if dbus-send --print-reply --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.GetVisible | grep -q "boolean true"; then
+    echo "Keyboard is VISIBLE"
+else
+    echo "Keyboard is HIDDEN"
+fi
+EOF
+chmod +x ~/keyboard-status.sh
+
+# Create keyboard restart script
+cat > ~/keyboard-restart.sh << EOF
+#!/bin/bash
+# Restart squeekboard service
+echo "Stopping squeekboard service..."
+systemctl --user stop squeekboard.service
+
+# Kill any remaining squeekboard processes
+pkill -f squeekboard
+
+# Wait a moment
+sleep 1
+
+# Start the service again
+echo "Starting squeekboard service..."
+systemctl --user start squeekboard.service
+
+# Wait for service to start
+sleep 2
+
+# Check if service is running
+if systemctl --user is-active squeekboard.service; then
+    echo "Squeekboard service restarted successfully"
+else
+    echo "Warning: Squeekboard service failed to restart. Starting manually..."
+    # Try starting squeekboard directly
+    nohup squeekboard > /dev/null 2>&1 &
+fi
+
+# Force show the keyboard
+dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
+echo "Keyboard shown"
+EOF
+chmod +x ~/keyboard-restart.sh
+
+# Create desktop shortcut for keyboard toggle
+mkdir -p ~/.local/share/applications/
+cat > ~/.local/share/applications/keyboard-toggle.desktop << EOF
+[Desktop Entry]
+Name=Toggle Keyboard
+Comment=Toggle on-screen keyboard visibility
+Exec=/bin/bash ~/keyboard-toggle.sh
+Icon=input-keyboard
+Terminal=false
+Type=Application
+Categories=Utility;
+EOF
+
+echo "Setup complete! For changes to fully take effect, please reboot your system."
+echo ""
+echo "Keyboard management scripts created:"
+echo "  ~/keyboard-toggle.sh - Toggle keyboard visibility"
+echo "  ~/keyboard-show.sh - Force show keyboard"
+echo "  ~/keyboard-hide.sh - Force hide keyboard"
+echo "  ~/keyboard-status.sh - Check keyboard status"
+echo "  ~/keyboard-restart.sh - Restart keyboard service"
+echo ""
+echo "If the keyboard doesn't appear automatically, try:"
+echo "1. Run ~/keyboard-show.sh to manually show it"
+echo "2. Run ~/keyboard-restart.sh to restart the keyboard service"
+echo "3. Press F5 in the application to toggle the keyboard"
 """
 
     # Create scripts directory if it doesn't exist

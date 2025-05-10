@@ -6,7 +6,7 @@ from .ui_components import (
     NotificationBanner, LoadingOverlay
 )
 from .security import Security
-from .window_transition import WindowTransition, TransitionType
+from .transitions import WindowTransitionManager
 
 __all__ = [
     # Keyboard handler
@@ -31,10 +31,9 @@ __all__ = [
     'NotificationBanner',
     'LoadingOverlay',
 
-    # Window Transitions
-    'WindowTransition',
-    'TransitionType',
-
     # Security
-    'Security'
+    'Security',
+
+    # Transitions
+    'WindowTransitionManager'
 ]

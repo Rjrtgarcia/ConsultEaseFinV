@@ -237,24 +237,56 @@ class AdminLoginWindow(BaseWindow):
         import logging
         import subprocess
         import sys
+        from PyQt5.QtCore import QTimer
+        from PyQt5.QtWidgets import QApplication
 
         logger = logging.getLogger(__name__)
         logger.info("AdminLoginWindow shown, triggering keyboard")
 
+        # Get the keyboard handler from the main application
+        keyboard_handler = None
+        try:
+            # Try to get the keyboard handler from the main application
+            main_app = QApplication.instance()
+            if hasattr(main_app, 'keyboard_handler'):
+                keyboard_handler = main_app.keyboard_handler
+                logger.info("Found keyboard handler in main application")
+        except Exception as e:
+            logger.error(f"Error getting keyboard handler: {str(e)}")
+
+        # Make sure the input fields have the keyboard property set
+        self.username_input.setProperty("keyboardOnFocus", True)
+        self.password_input.setProperty("keyboardOnFocus", True)
+
         # Focus the username input to trigger the keyboard
         self.username_input.setFocus()
 
-        # Try to explicitly show the keyboard using DBus
-        try:
-            if sys.platform.startswith('linux'):
-                # Try to use dbus-send to force the keyboard
-                cmd = [
-                    "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
-                    "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
-                ]
-                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                logger.info("Sent dbus command to show squeekboard")
-        except Exception as e:
-            logger.error(f"Error showing keyboard: {str(e)}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+        # Try to force show the keyboard using the handler
+        if keyboard_handler:
+            logger.info("Using keyboard handler to force show keyboard")
+            # Try multiple times with delays to ensure it appears
+            keyboard_handler.force_show_keyboard()
+
+            # Schedule another attempt after a short delay
+            QTimer.singleShot(500, keyboard_handler.force_show_keyboard)
+        else:
+            # Fallback to direct DBus call
+            logger.info("No keyboard handler found, using direct DBus call")
+            try:
+                if sys.platform.startswith('linux'):
+                    # Try to use dbus-send to force the keyboard with multiple attempts
+                    cmd = [
+                        "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
+                        "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
+                    ]
+                    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    logger.info("Sent dbus command to show squeekboard")
+
+                    # Try again after a delay
+                    QTimer.singleShot(500, lambda: subprocess.Popen(cmd,
+                                                                  stdout=subprocess.DEVNULL,
+                                                                  stderr=subprocess.DEVNULL))
+            except Exception as e:
+                logger.error(f"Error showing keyboard: {str(e)}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
