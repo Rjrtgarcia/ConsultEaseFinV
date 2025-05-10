@@ -18,9 +18,8 @@ This is the firmware for the Faculty Desk Unit component of the ConsultEase syst
 | MISO            | GPIO 19   |
 | SCK/CLK         | GPIO 18   |
 | CS              | GPIO 5    |
-| DC              | GPIO 2    |
-| RST             | GPIO 4    |
-| BL              | GPIO 15   |
+| DC              | GPIO 21   |
+| RST             | GPIO 22   |
 | VCC             | 3.3V      |
 | GND             | GND       |
 
@@ -28,55 +27,108 @@ This is the firmware for the Faculty Desk Unit component of the ConsultEase syst
 
 The following libraries need to be installed via the Arduino Library Manager:
 
-- TFT_eSPI (by Bodmer)
+- WiFi
 - PubSubClient (by Nick O'Leary)
-- ArduinoJson (by Benoit Blanchon)
-- NimBLE-Arduino (by h2zero)
+- BLEDevice
+- BLEServer
+- BLEUtils
+- BLE2902
+- SPI
+- Adafruit_GFX
+- Adafruit_ST7789
+- time
 
 ## Setup and Configuration
 
 1. Install the required libraries in Arduino IDE
-2. Copy the `User_Setup.h` file to the `libraries/TFT_eSPI` folder to configure the display
-3. Open `config.h` and update the following settings:
-   - WiFi credentials (`WIFI_SSID` and `WIFI_PASSWORD`)
-   - MQTT server IP address (`MQTT_SERVER`)
-   - Faculty ID (`FACULTY_ID`) - This should match the faculty ID in the database
-   - Faculty name (`FACULTY_NAME`) - This should match the faculty name in the database
-4. Open `faculty_desk_unit.ino` in Arduino IDE
-5. Compile and upload to your ESP32
+2. Open `faculty_desk_unit.ino` in Arduino IDE
+3. Update the following settings in the code:
+   - WiFi credentials (`ssid` and `password`)
+   - MQTT broker IP address (`mqtt_server`)
+   - Current user name (`current_user`)
+4. Compile and upload to your ESP32
 
-### BLE Beacon Configuration
+## Testing
 
-1. Open the `ble_beacon/config.h` file and update the following settings:
-   - Faculty ID (`FACULTY_ID`) - This should match the faculty ID in the database
-   - Faculty name (`FACULTY_NAME`) - This should match the faculty name in the database
-2. Open `ble_beacon/ble_beacon.ino` in Arduino IDE
-3. Compile and upload to a separate ESP32 device that will serve as the faculty's BLE beacon
+To test the faculty desk unit, you can use the test scripts in the `test_scripts` directory:
+
+1. Make sure the central system is running
+2. Make sure the MQTT broker is running
+3. Run the test script:
+   - On Windows: `test_scripts\test_faculty_desk_unit.bat`
+   - On Linux/macOS: `bash test_scripts/test_faculty_desk_unit.sh`
+
+This will:
+1. Create a faculty member named "Jeysibn" in the database
+2. Simulate a BLE beacon connected event
+3. Send a consultation request
+4. Simulate a BLE beacon disconnected event
 
 ## Usage
 
 1. The unit will automatically connect to WiFi and the MQTT broker
-2. It will scan for the configured BLE beacon at regular intervals
-3. When the faculty's BLE beacon is detected, status updates to "Available"
-4. When the beacon is not detected for 15 seconds, status updates to "Unavailable"
+2. It will act as a BLE server, but simulates an always-connected BLE client
+3. The faculty status is always set to "Available" (BLE always on)
+4. The unit will periodically send "keychain_connected" messages to maintain the available status
 5. Consultation requests from students will appear on the display
+
+### BLE Always-On Feature
+
+This version of the faculty desk unit simulates an always-connected BLE client, which means:
+- The faculty status is always shown as "Available" in the central system
+- The unit will still accept real BLE client connections, but won't change status when they disconnect
+- Every 5 minutes, the unit sends a "keychain_connected" message to ensure the faculty remains available
+- This feature is useful for faculty members who want to be always available for consultations
+
+## Manual Testing
+
+You can also test the faculty desk unit manually:
+
+1. Create a faculty member:
+   ```
+   python test_scripts/create_jeysibn_faculty.py
+   ```
+
+2. Simulate BLE beacon connected event:
+   ```
+   python test_scripts/simulate_ble_connection.py --broker <mqtt_broker_ip> --connect
+   ```
+
+3. Send a consultation request:
+   ```
+   python test_scripts/send_consultation_request.py
+   ```
+
+4. Simulate BLE beacon disconnected event:
+   ```
+   python test_scripts/simulate_ble_connection.py --broker <mqtt_broker_ip> --disconnect
+   ```
+
+Replace `<mqtt_broker_ip>` with the IP address of your MQTT broker.
 
 ## Troubleshooting
 
-- If the display doesn't work, check the pin connections and TFT_eSPI configuration
-- If BLE detection isn't working, verify the target BLE address and RSSI threshold
-- For MQTT connection issues, check the broker address and network connectivity
-- Serial monitor (115200 baud) provides debugging information
+### MQTT Connection Issues
 
-## Advanced Settings
+If the faculty desk unit is not connecting to the MQTT broker:
+- Make sure the MQTT broker IP address is correct
+- Make sure the MQTT broker is running
+- Make sure the ESP32 is connected to the WiFi network
 
-You can modify these parameters in the `config.h` file:
+### BLE Issues
 
-- `BLE_SCAN_INTERVAL`: Time between BLE scans (milliseconds)
-- `BLE_SCAN_DURATION`: Duration of each BLE scan (seconds)
-- `BLE_RSSI_THRESHOLD`: Signal strength threshold for presence detection
-- `TFT_ROTATION`: Display rotation (0=Portrait, 1=Landscape, 2=Inverted Portrait, 3=Inverted Landscape)
-- Various color settings for the UI theme
+The faculty desk unit is configured to always report as connected, but if you want to connect a real BLE client:
+- Make sure the BLE client (keychain) is powered on
+- Make sure the BLE client is within range of the ESP32
+- Check the serial output for BLE-related messages
+- Note that disconnecting a real BLE client will not change the faculty status (it will remain "Available")
+
+### Display Issues
+
+If the display is not working:
+- Check the wiring connections
+- Make sure the display is powered on
+- Try running the test screen function to verify the display is working
 
 ## Integration with Central System
 
@@ -90,34 +142,35 @@ The Faculty Desk Unit publishes faculty status updates to:
 - `consultease/faculty/{faculty_id}/status` - Faculty status updates
 - `professor/status` - Alternative topic for backward compatibility
 
-When the BLE beacon is detected, the Faculty Desk Unit publishes a status update with `keychain_connected` or `keychain_disconnected` message, which the central system uses to update the faculty status in the database.
+When the BLE client connects or disconnects, the Faculty Desk Unit publishes a status update with `keychain_connected` or `keychain_disconnected` message, which the central system uses to update the faculty status in the database.
 
 ## MQTT Message Format
 
 ### Consultation Request (from Central System to Faculty Desk Unit)
-```json
-{
-  "message": "Student: Alice Johnson\nCourse: CS101\nRequest: Need help with assignment",
-  "student_name": "Alice Johnson",
-  "course_code": "CS101",
-  "consultation_id": 123,
-  "timestamp": "2025-05-02T09:46:02"
-}
+```
+Student: Alice Johnson
+Course: CS101
+Request: Need help with assignment
 ```
 
 ### Status Update (from Faculty Desk Unit to Central System)
-```json
-{
-  "status": true,
-  "faculty_id": 1
-}
+```
+keychain_connected
 ```
 
 or
 
-```json
-{
-  "keychain_connected": true,
-  "faculty_id": 1
-}
 ```
+keychain_disconnected
+```
+
+## UI Features
+
+The faculty desk unit features a modern UI with the following elements:
+
+- Gold accent bar on the left side
+- Header with date and time
+- Message area with title and content
+- Status bar at the bottom
+- National University Philippines color scheme (blue and gold)
+- Smooth transitions between screens

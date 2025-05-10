@@ -90,19 +90,40 @@ class FacultyController:
                 if data == "keychain_connected":
                     status = True
                     # Use faculty ID from the client ID (DeskUnit_Jeysibn)
-                    # For now, we'll use faculty ID 1 as default
-                    faculty_id = 1
-                    logger.info(f"BLE beacon connected for faculty desk unit (ID: {faculty_id})")
+                    # Find faculty with name "Jeysibn"
+                    db = get_db()
+                    faculty = db.query(Faculty).filter(Faculty.name == "Jeysibn").first()
+                    if faculty:
+                        faculty_id = faculty.id
+                        logger.info(f"BLE beacon connected for faculty desk unit (ID: {faculty_id}, Name: Jeysibn)")
+                    else:
+                        logger.error("Faculty 'Jeysibn' not found in database")
+                        return
                 elif data == "keychain_disconnected":
                     status = False
                     # Use faculty ID from the client ID (DeskUnit_Jeysibn)
-                    # For now, we'll use faculty ID 1 as default
-                    faculty_id = 1
-                    logger.info(f"BLE beacon disconnected for faculty desk unit (ID: {faculty_id})")
+                    # Find faculty with name "Jeysibn"
+                    db = get_db()
+                    faculty = db.query(Faculty).filter(Faculty.name == "Jeysibn").first()
+                    if faculty:
+                        faculty_id = faculty.id
+                        logger.info(f"BLE beacon disconnected for faculty desk unit (ID: {faculty_id}, Name: Jeysibn)")
+                    else:
+                        logger.error("Faculty 'Jeysibn' not found in database")
+                        return
             else:
                 # This is a JSON message
                 status = data.get('status', False)
-                faculty_id = data.get('faculty_id', 1)  # Default to faculty ID 1
+                faculty_id = data.get('faculty_id')
+                if faculty_id is None:
+                    # Find faculty with name "Jeysibn"
+                    db = get_db()
+                    faculty = db.query(Faculty).filter(Faculty.name == "Jeysibn").first()
+                    if faculty:
+                        faculty_id = faculty.id
+                    else:
+                        logger.error("Faculty 'Jeysibn' not found in database")
+                        return
         else:
             # Extract faculty ID from topic (e.g., "consultease/faculty/123/status")
             parts = topic.split('/')
@@ -117,15 +138,19 @@ class FacultyController:
                 return
 
             # Get status from data
-            status = data.get('status', False)
+            if isinstance(data, dict):
+                status = data.get('status', False)
 
-            # Check if this is a BLE beacon status update
-            if 'keychain_connected' in data:
-                status = True
-                logger.info(f"BLE beacon connected for faculty {faculty_id}")
-            elif 'keychain_disconnected' in data:
-                status = False
-                logger.info(f"BLE beacon disconnected for faculty {faculty_id}")
+                # Check if this is a BLE beacon status update
+                if 'keychain_connected' in data:
+                    status = True
+                    logger.info(f"BLE beacon connected for faculty {faculty_id}")
+                elif 'keychain_disconnected' in data:
+                    status = False
+                    logger.info(f"BLE beacon disconnected for faculty {faculty_id}")
+            else:
+                logger.error(f"Invalid data format for topic {topic}: {data}")
+                return
 
         # If we couldn't determine faculty ID or status, return
         if faculty_id is None or status is None:

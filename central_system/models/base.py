@@ -116,6 +116,13 @@ def init_db():
                     email="jane.doe@university.edu",
                     ble_id="AA:BB:CC:DD:EE:FF",
                     status=False
+                ),
+                Faculty(
+                    name="Jeysibn",
+                    department="Computer Science",
+                    email="jeysibn@university.edu",
+                    ble_id="4fafc201-1fb5-459e-8fcc-c5c9c331914b",  # Match the SERVICE_UUID in the faculty desk unit code
+                    status=True  # Set to available for testing
                 )
             ]
             db.add_all(sample_faculty)

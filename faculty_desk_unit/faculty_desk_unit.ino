@@ -90,11 +90,20 @@ class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
       deviceConnected = true;
       mqttClient.publish(mqtt_topic_status, "keychain_connected");
+      Serial.println("BLE client connected");
     };
 
     void onDisconnect(BLEServer* pServer) {
-      deviceConnected = false;
-      mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
+      // We'll keep the device as connected even when a client disconnects
+      // This ensures the faculty is always shown as available
+      Serial.println("BLE client disconnected, but keeping status as connected");
+
+      // Restart advertising so new clients can connect
+      BLEDevice::startAdvertising();
+
+      // We don't change deviceConnected status or publish disconnection
+      // deviceConnected = false;
+      // mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
     }
 };
 
@@ -582,6 +591,15 @@ void setup() {
   Serial.println("BLE Server ready!");
   displaySystemStatus("BLE Server ready");
 
+  // Simulate a connected BLE client at startup
+  deviceConnected = true;
+  oldDeviceConnected = true;
+
+  // Publish connected status to MQTT
+  mqttClient.publish(mqtt_topic_status, "keychain_connected");
+  Serial.println("BLE client simulated as connected at startup");
+  displaySystemStatus("Keychain connected!");
+
   // Update time display
   updateTimeDisplay();
 
@@ -620,15 +638,10 @@ void loop() {
   }
   mqttClient.loop();
 
-  // BLE connection management
-  if (!deviceConnected && oldDeviceConnected) {
-    delay(500);
-    pServer->startAdvertising();
-    Serial.println("Start advertising");
-    displaySystemStatus("Keychain disconnected. Waiting for connection...");
-    oldDeviceConnected = deviceConnected;
-  }
+  // BLE connection management - simplified since we're keeping it always connected
+  // We only handle real connections, but don't change our simulated connected state
   if (deviceConnected && !oldDeviceConnected) {
+    // A real client connected
     displaySystemStatus("Keychain connected!");
 
     // Show a notification about keychain connection - seamless design
@@ -654,8 +667,19 @@ void loop() {
     oldDeviceConnected = deviceConnected;
   }
 
-  // Update time display every minute
+  // Get current time for all time-based operations
   unsigned long currentMillis = millis();
+
+  // Periodically ensure we're still reporting as connected
+  static unsigned long lastStatusUpdateTime = 0;
+  if (currentMillis - lastStatusUpdateTime > 300000) { // Every 5 minutes
+    lastStatusUpdateTime = currentMillis;
+    // Re-publish connected status to ensure faculty shows as available
+    mqttClient.publish(mqtt_topic_status, "keychain_connected");
+    Serial.println("Periodic BLE connected status update sent");
+  }
+
+  // Update time display every minute
   if (currentMillis - lastTimeUpdate > 60000) {
     lastTimeUpdate = currentMillis;
     updateTimeDisplay();
