@@ -44,6 +44,8 @@ from central_system.utils import (
     apply_stylesheet,
     WindowTransitionManager
 )
+# Import keyboard integration
+from central_system.utils.direct_keyboard import get_direct_keyboard, setup_input_hooks
 # Import icons module separately to avoid early QPixmap creation
 from central_system.utils import icons
 
@@ -85,6 +87,15 @@ class ConsultEaseApp:
         except Exception as e:
             logger.error(f"Failed to install virtual keyboard handler: {e}")
             self.keyboard_handler = None
+
+        # Initialize direct keyboard integration
+        try:
+            self.direct_keyboard = get_direct_keyboard()
+            setup_input_hooks()
+            logger.info("Initialized direct keyboard integration")
+        except Exception as e:
+            logger.error(f"Failed to initialize direct keyboard integration: {e}")
+            self.direct_keyboard = None
 
         # Initialize database
         init_db()
@@ -330,13 +341,22 @@ class ConsultEaseApp:
 
         # Define a callback for after the transition completes
         def after_transition():
-            # Force the keyboard to show
+            # Force the keyboard to show using both methods
             if self.keyboard_handler:
-                logger.info("Forcing keyboard to show for admin login window")
+                logger.info("Forcing keyboard to show using keyboard handler")
                 self.keyboard_handler.force_show_keyboard()
 
+            # Also use direct keyboard integration
+            if hasattr(self, 'direct_keyboard') and self.direct_keyboard:
+                logger.info("Forcing keyboard to show using direct keyboard integration")
+                self.direct_keyboard.show_keyboard()
+
+                # Try again after a delay
+                QTimer.singleShot(500, lambda: self.direct_keyboard.show_keyboard())
+                QTimer.singleShot(1000, lambda: self.direct_keyboard.show_keyboard())
+
             # Focus the username input to trigger the keyboard
-            QTimer.singleShot(500, lambda: self.admin_login_window.username_input.setFocus())
+            QTimer.singleShot(300, lambda: self.admin_login_window.username_input.setFocus())
 
         # Apply transition if there's a visible window to transition from
         if current_window:

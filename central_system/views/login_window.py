@@ -217,40 +217,55 @@ class LoginWindow(BaseWindow):
 
         # Force the keyboard to show up for manual RFID entry
         try:
-            # Get the keyboard handler from the main application
-            keyboard_handler = None
-            try:
-                # Try to get the keyboard handler from the main application
-                from PyQt5.QtWidgets import QApplication
-                main_app = QApplication.instance()
-                if hasattr(main_app, 'keyboard_handler'):
-                    keyboard_handler = main_app.keyboard_handler
-                    self.logger.info("Found keyboard handler in main application")
-            except Exception as e:
-                self.logger.error(f"Error getting keyboard handler: {str(e)}")
-
             # Focus the RFID input field to trigger the keyboard
             self.rfid_input.setFocus()
 
             # Make sure the input field has the keyboard property set
             self.rfid_input.setProperty("keyboardOnFocus", True)
 
-            # Try to force show the keyboard using the handler
-            if keyboard_handler:
-                self.logger.info("Using keyboard handler to force show keyboard")
-                # Try multiple times with delays to ensure it appears
-                keyboard_handler.force_show_keyboard()
+            # Try all available keyboard methods
+            from PyQt5.QtWidgets import QApplication
+            main_app = QApplication.instance()
 
-                # Schedule another attempt after a short delay
-                QTimer.singleShot(500, keyboard_handler.force_show_keyboard)
-            else:
-                # Fallback to direct DBus call
-                self.logger.info("No keyboard handler found, using direct DBus call")
+            # Method 1: Use direct keyboard integration
+            direct_keyboard = None
+            try:
+                if hasattr(main_app, 'direct_keyboard') and main_app.direct_keyboard:
+                    direct_keyboard = main_app.direct_keyboard
+                    self.logger.info("Found direct keyboard integration in main application")
+
+                    # Show keyboard with multiple attempts
+                    direct_keyboard.show_keyboard()
+                    QTimer.singleShot(500, direct_keyboard.show_keyboard)
+                    QTimer.singleShot(1000, direct_keyboard.show_keyboard)
+            except Exception as e:
+                self.logger.error(f"Error using direct keyboard integration: {str(e)}")
+
+            # Method 2: Use keyboard handler
+            keyboard_handler = None
+            try:
+                if hasattr(main_app, 'keyboard_handler') and main_app.keyboard_handler:
+                    keyboard_handler = main_app.keyboard_handler
+                    self.logger.info("Found keyboard handler in main application")
+
+                    # Try multiple times with delays to ensure it appears
+                    keyboard_handler.force_show_keyboard()
+                    QTimer.singleShot(500, keyboard_handler.force_show_keyboard)
+            except Exception as e:
+                self.logger.error(f"Error using keyboard handler: {str(e)}")
+
+            # Method 3: Direct DBus and command-line approaches
+            if not direct_keyboard and not keyboard_handler:
+                self.logger.info("No keyboard handlers found, using direct methods")
+
+                # Try direct DBus call
                 import subprocess
                 import sys
+                import os
+
                 if sys.platform.startswith('linux'):
                     try:
-                        # Try to use dbus-send to force the keyboard with multiple attempts
+                        # Try to use dbus-send to force the keyboard
                         cmd = [
                             "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
                             "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
@@ -258,14 +273,38 @@ class LoginWindow(BaseWindow):
                         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         self.logger.info("Sent dbus command to show squeekboard")
 
-                        # Try again after a delay
+                        # Try again after delays
                         QTimer.singleShot(500, lambda: subprocess.Popen(cmd,
                                                                       stdout=subprocess.DEVNULL,
                                                                       stderr=subprocess.DEVNULL))
+                        QTimer.singleShot(1000, lambda: subprocess.Popen(cmd,
+                                                                      stdout=subprocess.DEVNULL,
+                                                                      stderr=subprocess.DEVNULL))
+
+                        # Try using the keyboard-show.sh script if it exists
+                        home_dir = os.path.expanduser("~")
+                        script_path = os.path.join(home_dir, "keyboard-show.sh")
+                        if os.path.exists(script_path):
+                            self.logger.info("Using keyboard-show.sh script")
+                            QTimer.singleShot(1500, lambda: subprocess.Popen([script_path],
+                                                                          stdout=subprocess.DEVNULL,
+                                                                          stderr=subprocess.DEVNULL))
+
+                        # Try direct squeekboard launch as last resort
+                        QTimer.singleShot(2000, lambda: subprocess.Popen(["squeekboard"],
+                                                                      env=dict(os.environ, SQUEEKBOARD_FORCE="1"),
+                                                                      stdout=subprocess.DEVNULL,
+                                                                      stderr=subprocess.DEVNULL))
                     except Exception as e:
-                        self.logger.error(f"Error showing keyboard: {str(e)}")
+                        self.logger.error(f"Error with direct keyboard methods: {str(e)}")
+
+            # Focus the input field again after a delay
+            QTimer.singleShot(300, lambda: self.rfid_input.setFocus())
+
         except Exception as e:
-            self.logger.error(f"Error focusing RFID input: {str(e)}")
+            self.logger.error(f"Error showing keyboard: {str(e)}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
 
     def resizeEvent(self, event):
         """Handle window resize"""
