@@ -80,6 +80,20 @@ This version of the faculty desk unit simulates an always-connected BLE client, 
 - Every 5 minutes, the unit sends a "keychain_connected" message to ensure the faculty remains available
 - This feature is useful for faculty members who want to be always available for consultations
 
+### Database Integration
+
+The central system has been updated to support the always-on BLE client feature:
+- A new "always_available" field has been added to the Faculty model
+- Faculty members with this flag set will always be shown as available
+- The admin dashboard has been updated to allow setting this flag
+- The Jeysibn faculty member is set to always available by default
+
+To update an existing database with the new schema, run:
+```
+python scripts/update_faculty_schema.py
+python scripts/update_jeysibn_faculty.py
+```
+
 ## Manual Testing
 
 You can also test the faculty desk unit manually:

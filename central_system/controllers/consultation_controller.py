@@ -182,6 +182,9 @@ class ConsultationController:
                 consultation.accepted_at = datetime.datetime.now()
             elif status == ConsultationStatus.COMPLETED:
                 consultation.completed_at = datetime.datetime.now()
+            elif status == ConsultationStatus.CANCELLED:
+                # No specific timestamp for cancellation, but we could add one if needed
+                pass
 
             db.commit()
 
@@ -197,6 +200,18 @@ class ConsultationController:
         except Exception as e:
             logger.error(f"Error updating consultation status: {str(e)}")
             return None
+
+    def cancel_consultation(self, consultation_id):
+        """
+        Cancel a consultation request.
+
+        Args:
+            consultation_id (int): Consultation ID
+
+        Returns:
+            Consultation: Updated consultation object or None if error
+        """
+        return self.update_consultation_status(consultation_id, ConsultationStatus.CANCELLED)
 
     def get_consultations(self, student_id=None, faculty_id=None, status=None):
         """

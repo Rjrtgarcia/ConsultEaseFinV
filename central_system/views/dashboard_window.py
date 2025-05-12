@@ -8,6 +8,7 @@ from PyQt5.QtGui import QIcon, QColor, QPixmap
 import os
 import logging
 from .base_window import BaseWindow
+from .consultation_panel import ConsultationPanel
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -420,15 +421,15 @@ class DashboardWindow(BaseWindow):
 
         faculty_layout.addWidget(faculty_scroll)
 
-        # Consultation request form
-        self.consultation_form = ConsultationRequestForm()
-        self.consultation_form.setVisible(False)
-        self.consultation_form.request_submitted.connect(self.handle_consultation_request)
+        # Consultation panel with request form and history
+        self.consultation_panel = ConsultationPanel(self.student)
+        self.consultation_panel.consultation_requested.connect(self.handle_consultation_request)
+        self.consultation_panel.consultation_cancelled.connect(self.handle_consultation_cancel)
 
         # Add widgets to splitter
         content_splitter.addWidget(faculty_widget)
-        content_splitter.addWidget(self.consultation_form)
-        content_splitter.setSizes([700, 300])
+        content_splitter.addWidget(self.consultation_panel)
+        content_splitter.setSizes([500, 500])
 
         main_layout.addWidget(content_splitter)
 
@@ -516,6 +517,10 @@ class DashboardWindow(BaseWindow):
 
             # Update the grid
             self.populate_faculty_grid(faculties)
+
+            # Also refresh consultation history if student is logged in
+            if self.student:
+                self.consultation_panel.refresh_history()
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
@@ -537,20 +542,17 @@ class DashboardWindow(BaseWindow):
             )
             return
 
-        # Set the selected faculty
-        self.consultation_form.set_faculty(faculty)
-
         # Also populate the dropdown with all available faculty
         try:
             from ..controllers import FacultyController
             faculty_controller = FacultyController()
             available_faculty = faculty_controller.get_all_faculty(filter_available=True)
-            self.consultation_form.set_faculty_options(available_faculty)
+
+            # Set the faculty and faculty options in the consultation panel
+            self.consultation_panel.set_faculty(faculty)
+            self.consultation_panel.set_faculty_options(available_faculty)
         except Exception as e:
             logger.error(f"Error loading available faculty for consultation form: {str(e)}")
-
-        # Show the form
-        self.consultation_form.setVisible(True)
 
     def handle_consultation_request(self, faculty, message, course_code):
         """
@@ -561,20 +563,93 @@ class DashboardWindow(BaseWindow):
             message (str): Consultation request message
             course_code (str): Optional course code
         """
-        # Emit signal to controller
-        self.consultation_requested.emit(faculty, message, course_code)
+        try:
+            # Import consultation controller
+            from ..controllers import ConsultationController
 
-        # Hide the form
-        self.consultation_form.setVisible(False)
-        self.consultation_form.message_input.clear()
-        self.consultation_form.course_input.clear()
+            # Get consultation controller
+            consultation_controller = ConsultationController()
 
-        # Show confirmation
-        QMessageBox.information(
-            self,
-            "Consultation Request",
-            f"Your consultation request with {faculty.name} has been submitted."
-        )
+            # Create consultation
+            if self.student:
+                consultation = consultation_controller.create_consultation(
+                    student_id=self.student.id,
+                    faculty_id=faculty.id,
+                    request_message=message,
+                    course_code=course_code
+                )
+
+                if consultation:
+                    # Show confirmation
+                    QMessageBox.information(
+                        self,
+                        "Consultation Request",
+                        f"Your consultation request with {faculty.name} has been submitted."
+                    )
+
+                    # Refresh the consultation history
+                    self.consultation_panel.refresh_history()
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Consultation Request",
+                        f"Failed to submit consultation request. Please try again."
+                    )
+            else:
+                # No student logged in
+                QMessageBox.warning(
+                    self,
+                    "Consultation Request",
+                    "You must be logged in to submit a consultation request."
+                )
+        except Exception as e:
+            logger.error(f"Error creating consultation: {str(e)}")
+            QMessageBox.warning(
+                self,
+                "Consultation Request",
+                f"An error occurred while submitting your consultation request: {str(e)}"
+            )
+
+    def handle_consultation_cancel(self, consultation_id):
+        """
+        Handle consultation cancellation.
+
+        Args:
+            consultation_id (int): ID of the consultation to cancel
+        """
+        try:
+            # Import consultation controller
+            from ..controllers import ConsultationController
+
+            # Get consultation controller
+            consultation_controller = ConsultationController()
+
+            # Cancel consultation
+            consultation = consultation_controller.cancel_consultation(consultation_id)
+
+            if consultation:
+                # Show confirmation
+                QMessageBox.information(
+                    self,
+                    "Consultation Cancelled",
+                    f"Your consultation request has been cancelled."
+                )
+
+                # Refresh the consultation history
+                self.consultation_panel.refresh_history()
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Consultation Cancellation",
+                    f"Failed to cancel consultation request. Please try again."
+                )
+        except Exception as e:
+            logger.error(f"Error cancelling consultation: {str(e)}")
+            QMessageBox.warning(
+                self,
+                "Consultation Cancellation",
+                f"An error occurred while cancelling your consultation request: {str(e)}"
+            )
 
     def logout(self):
         """
