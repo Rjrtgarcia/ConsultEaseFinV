@@ -77,11 +77,13 @@ class KeyboardHandler(QObject):
     def _set_keyboard_environment(self):
         """Set environment variables to help with keyboard detection and usage"""
         # Set environment variables to ensure keyboard backends work properly
-        # These can help squeekboard know when to appear
         if sys.platform.startswith('linux'):
             os.environ["GDK_BACKEND"] = "wayland,x11"
             os.environ["QT_QPA_PLATFORM"] = "wayland;xcb"
-            # Force squeekboard to appear (used by the show_keyboard method)
+            # Set environment variables for onboard
+            os.environ["ONBOARD_ENABLE_TOUCH"] = "1"
+            os.environ["ONBOARD_XEMBED"] = "1"
+            # Keep squeekboard environment variable for backward compatibility
             os.environ["SQUEEKBOARD_FORCE"] = "1"
 
             # Check if we're running as root and warn if so
@@ -93,7 +95,68 @@ class KeyboardHandler(QObject):
         if not sys.platform.startswith('linux'):
             return
 
-        if self.keyboard_type == 'squeekboard':
+        if self.keyboard_type == 'onboard':
+            try:
+                # Check if onboard is already running
+                check_cmd = "pgrep -f onboard"
+                result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+
+                if result.returncode != 0:
+                    logger.info("Onboard not running, attempting to start it...")
+                    # Try to start onboard
+                    try:
+                        # Check if onboard is in autostart
+                        autostart_path = os.path.expanduser("~/.config/autostart/onboard-autostart.desktop")
+                        if os.path.exists(autostart_path):
+                            logger.info("Onboard autostart configuration found")
+                        else:
+                            # Create autostart entry
+                            os.makedirs(os.path.dirname(autostart_path), exist_ok=True)
+                            with open(autostart_path, 'w') as f:
+                                f.write("""[Desktop Entry]
+Type=Application
+Name=Onboard
+Exec=onboard --size=small --layout=Phone --enable-background-transparency --theme=Nightshade
+Comment=Flexible on-screen keyboard
+""")
+
+                            # Create onboard configuration directory
+                            try:
+                                config_dir = os.path.expanduser("~/.config/onboard")
+                                os.makedirs(config_dir, exist_ok=True)
+
+                                # Create onboard configuration file with touch-friendly settings
+                                config_path = os.path.join(config_dir, "onboard.conf")
+                                with open(config_path, 'w') as f:
+                                    f.write("""[main]
+layout=Phone
+theme=Nightshade
+key-size=small
+enable-background-transparency=true
+show-status-icon=true
+start-minimized=false
+show-tooltips=false
+auto-show=true
+auto-show-delay=500
+auto-hide=true
+auto-hide-delay=1000
+xembed-onboard=true
+enable-touch-input=true
+touch-feedback-enabled=true
+touch-feedback-size=small
+""")
+                                logger.info("Created onboard configuration file")
+                            except Exception as e:
+                                logger.debug(f"Error setting up onboard configuration: {e}")
+                            logger.info("Created onboard autostart configuration")
+                    except Exception as e:
+                        logger.debug(f"Error setting up onboard autostart: {e}")
+                else:
+                    logger.info("Onboard is already running")
+            except Exception as e:
+                logger.error(f"Error checking/starting onboard: {e}")
+
+        elif self.keyboard_type == 'squeekboard':
             try:
                 # Check if squeekboard service is running
                 check_cmd = "systemctl --user is-active squeekboard.service"
@@ -167,7 +230,7 @@ class KeyboardHandler(QObject):
             return env_keyboard
 
         # Check for each supported keyboard in order of preference
-        keyboards = ['squeekboard', 'onboard', 'matchbox-keyboard']
+        keyboards = ['onboard', 'squeekboard', 'matchbox-keyboard']
 
         # Log all available keyboards for debugging
         logger.info("Checking for available on-screen keyboards...")
@@ -257,10 +320,14 @@ class KeyboardHandler(QObject):
                 if self.keyboard_type == 'squeekboard':
                     # Try dbus method first (more reliable)
                     self._trigger_squeekboard_dbus()
+                # For onboard, we'll let the timer handle it
             elif self.keyboard_type == 'squeekboard' and not self._is_squeekboard_visible():
                 # If keyboard should be visible but isn't, force it
                 logger.debug("Keyboard should be visible but isn't - forcing it to show")
                 self._trigger_squeekboard_dbus()
+            elif self.keyboard_type == 'onboard':
+                # For onboard, make sure it's running
+                self.show_keyboard()
 
         # Handle focus out events for text input widgets
         elif event.type() == QEvent.FocusOut and obj == self.current_focus_widget:
@@ -325,10 +392,13 @@ class KeyboardHandler(QObject):
                         break
 
             # If it's an input widget and keyboard isn't visible, show it
-            if clicked_should_show and not self.keyboard_visible and self.keyboard_type == 'squeekboard':
+            if clicked_should_show and not self.keyboard_visible:
                 if self.debug_mode:
                     logger.debug(f"Mouse click on input widget: {obj.__class__.__name__}")
-                self._trigger_squeekboard_dbus()
+                if self.keyboard_type == 'squeekboard':
+                    self._trigger_squeekboard_dbus()
+                elif self.keyboard_type == 'onboard':
+                    self.show_keyboard()
 
         # Pass the event along
         return super(KeyboardHandler, self).eventFilter(obj, event)
@@ -409,14 +479,29 @@ class KeyboardHandler(QObject):
 
         self.keyboard_status_check_time = current_time
 
-        # If we're using squeekboard, ensure the service is running
-        if self.keyboard_type == 'squeekboard':
-            self._ensure_keyboard_service()
+        # Ensure the appropriate keyboard service is running
+        self._ensure_keyboard_service()
 
+        # For squeekboard, check visibility via DBus
+        if self.keyboard_type == 'squeekboard':
             # If keyboard should be visible but isn't, try to show it
             if self.keyboard_visible and not self._is_squeekboard_visible() and self.current_focus_widget:
                 logger.debug("Keyboard should be visible but isn't - attempting to show it")
                 self._trigger_squeekboard_dbus()
+
+        # For onboard, check if it's running
+        elif self.keyboard_type == 'onboard' and self.keyboard_visible:
+            try:
+                # Check if onboard is running
+                check_cmd = "pgrep -f onboard"
+                result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+
+                # If not running but should be visible, restart it
+                if result.returncode != 0 and self.current_focus_widget:
+                    logger.debug("Onboard should be visible but isn't running - attempting to start it")
+                    self.show_keyboard()
+            except Exception as e:
+                logger.debug(f"Error checking onboard status: {e}")
 
     def _trigger_squeekboard_dbus(self):
         """Attempt to show squeekboard via DBus (most reliable method on Linux)"""
@@ -498,12 +583,30 @@ class KeyboardHandler(QObject):
                 QTimer.singleShot(500, self._trigger_squeekboard_dbus)
 
             elif self.keyboard_type == 'onboard':
-                # Onboard with more appropriate options for touch screens
-                self.keyboard_process = subprocess.Popen(
-                    ['onboard', '--size=small', '--layout=Phone', '--enable-background-transparency'],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
+                # Check if onboard is already running
+                try:
+                    check_cmd = "pgrep -f onboard"
+                    result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+
+                    if result.returncode != 0:
+                        # Onboard with more appropriate options for touch screens
+                        self.keyboard_process = subprocess.Popen(
+                            ['onboard', '--size=small', '--layout=Phone', '--enable-background-transparency', '--theme=Nightshade'],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            start_new_session=True
+                        )
+                        logger.info("Started onboard with enhanced settings")
+                    else:
+                        logger.debug("Onboard is already running")
+                except Exception as e:
+                    logger.error(f"Error checking onboard status: {e}")
+                    # Fallback to simple launch
+                    self.keyboard_process = subprocess.Popen(
+                        ['onboard', '--size=small', '--layout=Phone', '--enable-background-transparency', '--theme=Nightshade'],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
             elif self.keyboard_type == 'matchbox-keyboard':
                 self.keyboard_process = subprocess.Popen(
                     ['matchbox-keyboard'],
@@ -525,8 +628,23 @@ class KeyboardHandler(QObject):
 
         logger.info("Hiding virtual keyboard")
 
+        # For onboard, kill the process directly
+        if self.keyboard_type == 'onboard':
+            try:
+                # Kill any running onboard processes
+                subprocess.run(['pkill', '-f', 'onboard'],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+                self.keyboard_visible = False
+                self.keyboard_visibility_changed.emit(False)
+                logger.info("Killed onboard process")
+                return
+            except Exception as e:
+                logger.debug(f"Error killing onboard: {e}")
+                # Fall through to process termination
+
         # For squeekboard, try dbus method first
-        if self.keyboard_type == 'squeekboard' and self.dbus_available:
+        elif self.keyboard_type == 'squeekboard' and self.dbus_available:
             try:
                 cmd = [
                     "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
@@ -606,6 +724,15 @@ class KeyboardHandler(QObject):
 
             # And one more for good measure
             QTimer.singleShot(600, self._trigger_squeekboard_dbus)
+
+        # For onboard, make multiple attempts
+        elif self.keyboard_type == 'onboard':
+            # Try to show keyboard multiple times
+            self.show_keyboard()
+
+            # Schedule additional attempts
+            QTimer.singleShot(300, self.show_keyboard)
+            QTimer.singleShot(600, self.show_keyboard)
 
         # Also use the normal show method as a backup
         self.show_keyboard()

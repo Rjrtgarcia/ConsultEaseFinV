@@ -1,6 +1,7 @@
 import sys
 import os
 import logging
+import subprocess
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt, QTimer
 
@@ -335,22 +336,56 @@ class ConsultEaseApp:
 
         # Define a callback for after the transition completes
         def after_transition():
+            # Set environment variable to prefer onboard
+            os.environ["CONSULTEASE_KEYBOARD"] = "onboard"
+            logger.info("Set CONSULTEASE_KEYBOARD=onboard environment variable")
+
             # Force the keyboard to show using both methods
             if self.keyboard_handler:
                 logger.info("Forcing keyboard to show using keyboard handler")
                 self.keyboard_handler.force_show_keyboard()
+                # Try again after delays
+                QTimer.singleShot(300, self.keyboard_handler.force_show_keyboard)
+                QTimer.singleShot(600, self.keyboard_handler.force_show_keyboard)
 
             # Also use direct keyboard integration
             if hasattr(self, 'direct_keyboard') and self.direct_keyboard:
                 logger.info("Forcing keyboard to show using direct keyboard integration")
                 self.direct_keyboard.show_keyboard()
 
-                # Try again after a delay
+                # Try again after delays
                 QTimer.singleShot(500, lambda: self.direct_keyboard.show_keyboard())
                 QTimer.singleShot(1000, lambda: self.direct_keyboard.show_keyboard())
+                QTimer.singleShot(1500, lambda: self.direct_keyboard.show_keyboard())
+
+            # Try direct onboard launch as a fallback
+            try:
+                # Check if onboard is available
+                onboard_check = subprocess.run(['which', 'onboard'],
+                                            stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE)
+
+                if onboard_check.returncode == 0:
+                    # Kill any existing instances
+                    subprocess.run(['pkill', '-f', 'onboard'],
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+
+                    # Start onboard with appropriate options
+                    subprocess.Popen(
+                        ['onboard', '--size=small', '--layout=Phone', '--enable-background-transparency', '--theme=Nightshade'],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True
+                    )
+                    logger.info("Started onboard directly from admin login")
+            except Exception as e:
+                logger.error(f"Error starting onboard directly: {e}")
 
             # Focus the username input to trigger the keyboard
             QTimer.singleShot(300, lambda: self.admin_login_window.username_input.setFocus())
+            # Focus again after a longer delay to ensure keyboard appears
+            QTimer.singleShot(800, lambda: self.admin_login_window.username_input.setFocus())
 
         # Apply transition if there's a visible window to transition from
         if current_window:

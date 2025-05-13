@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                             QLineEdit, QTextEdit, QComboBox, QMessageBox,
                             QTabWidget, QTableWidget, QTableWidgetItem,
                             QHeaderView, QSplitter, QDialog, QFormLayout,
-                            QSpacerItem, QSizePolicy)
+                            QSpacerItem, QSizePolicy, QProgressBar)
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSize, QDateTime
 from PyQt5.QtGui import QIcon, QColor, QPixmap, QFont
 
@@ -104,11 +104,51 @@ class ConsultationRequestForm(QFrame):
         message_layout.addWidget(self.message_input)
         main_layout.addLayout(message_layout)
 
-        # Character count
+        # Character count with visual indicator
+        char_count_frame = QFrame()
+        char_count_layout = QVBoxLayout(char_count_frame)
+        char_count_layout.setContentsMargins(0, 0, 0, 0)
+        char_count_layout.setSpacing(2)
+
+        # Label and progress bar in a horizontal layout
+        count_indicator_layout = QHBoxLayout()
+        count_indicator_layout.setContentsMargins(0, 0, 0, 0)
+
         self.char_count_label = QLabel("0/500 characters")
-        self.char_count_label.setAlignment(Qt.AlignRight)
+        self.char_count_label.setAlignment(Qt.AlignLeft)
         self.char_count_label.setStyleSheet("color: #7f8c8d; font-size: 10pt;")
-        main_layout.addWidget(self.char_count_label)
+
+        # Add a small info label about the limit
+        char_limit_info = QLabel("(500 character limit)")
+        char_limit_info.setStyleSheet("color: #7f8c8d; font-size: 9pt; font-style: italic;")
+        char_limit_info.setAlignment(Qt.AlignRight)
+
+        count_indicator_layout.addWidget(self.char_count_label)
+        count_indicator_layout.addStretch()
+        count_indicator_layout.addWidget(char_limit_info)
+
+        char_count_layout.addLayout(count_indicator_layout)
+
+        # Add progress bar for visual feedback
+        self.char_count_progress = QProgressBar()
+        self.char_count_progress.setRange(0, 500)
+        self.char_count_progress.setValue(0)
+        self.char_count_progress.setTextVisible(False)
+        self.char_count_progress.setFixedHeight(5)
+        self.char_count_progress.setStyleSheet("""
+            QProgressBar {
+                background-color: #f0f0f0;
+                border: none;
+                border-radius: 2px;
+            }
+            QProgressBar::chunk {
+                background-color: #7f8c8d;
+                border-radius: 2px;
+            }
+        """)
+
+        char_count_layout.addWidget(self.char_count_progress)
+        main_layout.addWidget(char_count_frame)
 
         # Connect text changed signal to update character count
         self.message_input.textChanged.connect(self.update_char_count)
@@ -142,18 +182,35 @@ class ConsultationRequestForm(QFrame):
 
     def update_char_count(self):
         """
-        Update the character count label.
+        Update the character count label and progress bar.
         """
         count = len(self.message_input.toPlainText())
         color = "#7f8c8d"  # Default gray
+        progress_color = "#7f8c8d"  # Default gray
 
         if count > 400:
             color = "#f39c12"  # Warning yellow
+            progress_color = "#f39c12"
         if count > 500:
             color = "#e74c3c"  # Error red
+            progress_color = "#e74c3c"
 
         self.char_count_label.setText(f"{count}/500 characters")
         self.char_count_label.setStyleSheet(f"color: {color}; font-size: 10pt;")
+
+        # Update progress bar
+        self.char_count_progress.setValue(count)
+        self.char_count_progress.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: #f0f0f0;
+                border: none;
+                border-radius: 2px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {progress_color};
+                border-radius: 2px;
+            }}
+        """)
 
     def set_faculty(self, faculty):
         """
@@ -571,6 +628,7 @@ class ConsultationDetailsDialog(QDialog):
 class ConsultationPanel(QTabWidget):
     """
     Main consultation panel with request form and history tabs.
+    Improved with better transitions and user feedback.
     """
     consultation_requested = pyqtSignal(object, str, str)
     consultation_cancelled = pyqtSignal(int)
@@ -580,6 +638,14 @@ class ConsultationPanel(QTabWidget):
         self.student = student
         self.init_ui()
 
+        # Set up auto-refresh timer for history panel
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.timeout.connect(self.auto_refresh_history)
+        self.refresh_timer.start(60000)  # Refresh every minute
+
+        # Connect tab change signal
+        self.currentChanged.connect(self.on_tab_changed)
+
     def init_ui(self):
         """
         Initialize the consultation panel UI.
@@ -587,23 +653,27 @@ class ConsultationPanel(QTabWidget):
         self.setStyleSheet('''
             QTabWidget::pane {
                 border: 1px solid #ddd;
-                border-radius: 5px;
+                border-radius: 8px;
                 background-color: #f5f5f5;
+                padding: 5px;
             }
             QTabBar::tab {
                 background-color: #ecf0f1;
                 border: 1px solid #ddd;
                 border-bottom: none;
-                border-top-left-radius: 5px;
-                border-top-right-radius: 5px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
                 padding: 8px 15px;
                 margin-right: 2px;
-                font-size: 11pt;
+                font-size: 12pt;
             }
             QTabBar::tab:selected {
                 background-color: #3498db;
                 color: white;
                 font-weight: bold;
+            }
+            QTabBar::tab:hover:!selected {
+                background-color: #d0d0d0;
             }
         ''')
 
@@ -617,6 +687,9 @@ class ConsultationPanel(QTabWidget):
         self.history_panel.consultation_cancelled.connect(self.handle_consultation_cancel)
         self.addTab(self.history_panel, "Consultation History")
 
+        # Set minimum size for better usability
+        self.setMinimumSize(800, 600)
+
     def set_student(self, student):
         """
         Set the student for the consultation panel.
@@ -624,12 +697,18 @@ class ConsultationPanel(QTabWidget):
         self.student = student
         self.history_panel.set_student(student)
 
+        # Update window title with student name
+        if student and hasattr(self.parent(), 'setWindowTitle'):
+            self.parent().setWindowTitle(f"ConsultEase - {student.name}")
+
     def set_faculty(self, faculty):
         """
         Set the faculty for the consultation request.
         """
         self.request_form.set_faculty(faculty)
-        self.setCurrentIndex(0)  # Switch to request form tab
+
+        # Animate transition to request form tab
+        self.animate_tab_change(0)
 
     def set_faculty_options(self, faculty_list):
         """
@@ -637,28 +716,114 @@ class ConsultationPanel(QTabWidget):
         """
         self.request_form.set_faculty_options(faculty_list)
 
+        # Update status message if no faculty available
+        if not faculty_list:
+            QMessageBox.information(
+                self,
+                "No Faculty Available",
+                "There are no faculty members available at this time. Please try again later."
+            )
+
     def handle_consultation_request(self, faculty, message, course_code):
         """
         Handle consultation request submission.
         """
-        # Emit signal to controller
-        self.consultation_requested.emit(faculty, message, course_code)
+        try:
+            # Emit signal to controller
+            self.consultation_requested.emit(faculty, message, course_code)
 
-        # Refresh history
-        self.history_panel.refresh_consultations()
+            # Show success message
+            QMessageBox.information(
+                self,
+                "Consultation Request Submitted",
+                f"Your consultation request with {faculty.name} has been submitted successfully."
+            )
 
-        # Switch to history tab
-        self.setCurrentIndex(1)
+            # Clear form fields
+            self.request_form.message_input.clear()
+            self.request_form.course_input.clear()
+
+            # Refresh history
+            self.history_panel.refresh_consultations()
+
+            # Animate transition to history tab
+            self.animate_tab_change(1)
+
+        except Exception as e:
+            logger.error(f"Error submitting consultation request: {str(e)}")
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Failed to submit consultation request: {str(e)}"
+            )
 
     def handle_consultation_cancel(self, consultation_id):
         """
         Handle consultation cancellation.
         """
-        # Emit signal to controller
-        self.consultation_cancelled.emit(consultation_id)
+        try:
+            # Emit signal to controller
+            self.consultation_cancelled.emit(consultation_id)
 
-        # Refresh history
-        self.history_panel.refresh_consultations()
+            # Show success message
+            QMessageBox.information(
+                self,
+                "Consultation Cancelled",
+                "Your consultation request has been cancelled successfully."
+            )
+
+            # Refresh history
+            self.history_panel.refresh_consultations()
+
+        except Exception as e:
+            logger.error(f"Error cancelling consultation: {str(e)}")
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Failed to cancel consultation: {str(e)}"
+            )
+
+    def animate_tab_change(self, tab_index):
+        """
+        Animate the transition to a different tab.
+
+        Args:
+            tab_index (int): The index of the tab to switch to
+        """
+        # Set the current tab with a smooth animation
+        self.setCurrentIndex(tab_index)
+
+        # Flash the tab briefly to draw attention
+        current_style = self.tabBar().tabTextColor(tab_index)
+
+        # Create a timer to reset the color after a brief flash
+        def reset_color():
+            self.tabBar().setTabTextColor(tab_index, current_style)
+
+        # Set highlight color
+        self.tabBar().setTabTextColor(tab_index, QColor("#2980b9"))
+
+        # Reset after a short delay
+        QTimer.singleShot(500, reset_color)
+
+    def on_tab_changed(self, index):
+        """
+        Handle tab change events.
+
+        Args:
+            index (int): The index of the newly selected tab
+        """
+        # Refresh history when switching to history tab
+        if index == 1:  # History tab
+            self.history_panel.refresh_consultations()
+
+    def auto_refresh_history(self):
+        """
+        Automatically refresh the history panel periodically.
+        """
+        # Only refresh if the history tab is visible
+        if self.currentIndex() == 1:
+            self.history_panel.refresh_consultations()
 
     def refresh_history(self):
         """

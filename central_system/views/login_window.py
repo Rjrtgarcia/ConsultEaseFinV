@@ -238,6 +238,10 @@ class LoginWindow(BaseWindow):
                     direct_keyboard.show_keyboard()
                     QTimer.singleShot(500, direct_keyboard.show_keyboard)
                     QTimer.singleShot(1000, direct_keyboard.show_keyboard)
+
+                    # Set environment variable to prefer onboard
+                    os.environ["CONSULTEASE_KEYBOARD"] = "onboard"
+                    self.logger.info("Set CONSULTEASE_KEYBOARD=onboard environment variable")
             except Exception as e:
                 self.logger.error(f"Error using direct keyboard integration: {str(e)}")
 
@@ -251,6 +255,11 @@ class LoginWindow(BaseWindow):
                     # Try multiple times with delays to ensure it appears
                     keyboard_handler.force_show_keyboard()
                     QTimer.singleShot(500, keyboard_handler.force_show_keyboard)
+                    QTimer.singleShot(1000, keyboard_handler.force_show_keyboard)
+
+                    # Set environment variable to prefer onboard
+                    os.environ["CONSULTEASE_KEYBOARD"] = "onboard"
+                    self.logger.info("Set CONSULTEASE_KEYBOARD=onboard environment variable")
             except Exception as e:
                 self.logger.error(f"Error using keyboard handler: {str(e)}")
 
@@ -265,21 +274,51 @@ class LoginWindow(BaseWindow):
 
                 if sys.platform.startswith('linux'):
                     try:
-                        # Try to use dbus-send to force the keyboard
-                        cmd = [
-                            "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
-                            "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
-                        ]
-                        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        self.logger.info("Sent dbus command to show squeekboard")
+                        # Try to start onboard first
+                        try:
+                            # Check if onboard is available
+                            onboard_check = subprocess.run(['which', 'onboard'],
+                                                        stdout=subprocess.PIPE,
+                                                        stderr=subprocess.PIPE)
 
-                        # Try again after delays
-                        QTimer.singleShot(500, lambda: subprocess.Popen(cmd,
-                                                                      stdout=subprocess.DEVNULL,
-                                                                      stderr=subprocess.DEVNULL))
-                        QTimer.singleShot(1000, lambda: subprocess.Popen(cmd,
-                                                                      stdout=subprocess.DEVNULL,
-                                                                      stderr=subprocess.DEVNULL))
+                            if onboard_check.returncode == 0:
+                                # Kill any existing instances
+                                subprocess.run(['pkill', '-f', 'onboard'],
+                                             stdout=subprocess.DEVNULL,
+                                             stderr=subprocess.DEVNULL)
+
+                                # Start onboard with appropriate options
+                                subprocess.Popen(
+                                    ['onboard', '--size=small', '--layout=Phone', '--enable-background-transparency'],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL,
+                                    start_new_session=True
+                                )
+                                self.logger.info("Started onboard directly")
+
+                                # Try again after delays
+                                QTimer.singleShot(500, lambda: subprocess.Popen(
+                                    ['onboard', '--size=small', '--layout=Phone', '--enable-background-transparency'],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL,
+                                    start_new_session=True
+                                ))
+                            else:
+                                # Fallback to squeekboard
+                                # Try to use dbus-send to force the keyboard
+                                cmd = [
+                                    "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
+                                    "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
+                                ]
+                                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                self.logger.info("Sent dbus command to show squeekboard")
+
+                                # Try again after delays
+                                QTimer.singleShot(500, lambda: subprocess.Popen(cmd,
+                                                                              stdout=subprocess.DEVNULL,
+                                                                              stderr=subprocess.DEVNULL))
+                        except Exception as e:
+                            self.logger.error(f"Error starting onboard: {e}")
 
                         # Try using the keyboard-show.sh script if it exists
                         home_dir = os.path.expanduser("~")
@@ -289,12 +328,6 @@ class LoginWindow(BaseWindow):
                             QTimer.singleShot(1500, lambda: subprocess.Popen([script_path],
                                                                           stdout=subprocess.DEVNULL,
                                                                           stderr=subprocess.DEVNULL))
-
-                        # Try direct squeekboard launch as last resort
-                        QTimer.singleShot(2000, lambda: subprocess.Popen(["squeekboard"],
-                                                                      env=dict(os.environ, SQUEEKBOARD_FORCE="1"),
-                                                                      stdout=subprocess.DEVNULL,
-                                                                      stderr=subprocess.DEVNULL))
                     except Exception as e:
                         self.logger.error(f"Error with direct keyboard methods: {str(e)}")
 
@@ -577,36 +610,58 @@ def create_keyboard_setup_script():
 # Enhanced setup script for ConsultEase virtual keyboard
 echo "Setting up ConsultEase virtual keyboard..."
 
-# Ensure squeekboard is installed
-if ! command -v squeekboard &> /dev/null; then
-    echo "Squeekboard not found, attempting to install..."
+# Ensure onboard is installed (preferred)
+if ! command -v onboard &> /dev/null; then
+    echo "Onboard not found, attempting to install..."
     sudo apt update
-    sudo apt install -y squeekboard
+    sudo apt install -y onboard
 fi
 
-# Ensure dbus-x11 is installed for dbus-send command
+# Ensure dbus-x11 is installed for dbus-send command (for fallback to squeekboard)
 if ! command -v dbus-send &> /dev/null; then
     echo "dbus-send not found, installing dbus-x11 package..."
     sudo apt update
     sudo apt install -y dbus-x11
 fi
 
-# Ensure squeekboard service is enabled and running
-echo "Configuring squeekboard service..."
-systemctl --user enable squeekboard.service
-systemctl --user restart squeekboard.service
+# Configure onboard
+echo "Configuring onboard..."
+mkdir -p ~/.config/autostart
+cat > ~/.config/autostart/onboard-autostart.desktop << EOF
+[Desktop Entry]
+Type=Application
+Name=Onboard
+Exec=onboard --size=small --layout=Phone --enable-background-transparency --theme=Nightshade
+Comment=Flexible on-screen keyboard
+EOF
 
-# Wait for service to start
-sleep 2
+# Create onboard configuration directory
+mkdir -p ~/.config/onboard
 
-# Check if service is running
-if systemctl --user is-active squeekboard.service; then
-    echo "Squeekboard service is running"
-else
-    echo "Warning: Squeekboard service failed to start. Will try alternative methods."
-    # Try starting squeekboard directly
-    nohup squeekboard > /dev/null 2>&1 &
-fi
+# Create onboard configuration file with touch-friendly settings
+cat > ~/.config/onboard/onboard.conf << EOF
+[main]
+layout=Phone
+theme=Nightshade
+key-size=small
+enable-background-transparency=true
+show-status-icon=true
+start-minimized=false
+show-tooltips=false
+auto-show=true
+auto-show-delay=500
+auto-hide=true
+auto-hide-delay=1000
+xembed-onboard=true
+enable-touch-input=true
+touch-feedback-enabled=true
+touch-feedback-size=small
+EOF
+
+# Start onboard
+echo "Starting onboard..."
+pkill -f onboard
+onboard --size=small --layout=Phone --enable-background-transparency &
 
 # Set environment variables for proper keyboard operation
 echo "Setting up environment variables..."
@@ -615,7 +670,9 @@ cat > ~/.config/environment.d/consultease.conf << EOF
 # ConsultEase keyboard environment variables
 GDK_BACKEND=wayland,x11
 QT_QPA_PLATFORM=wayland;xcb
-SQUEEKBOARD_FORCE=1
+ONBOARD_ENABLE_TOUCH=1
+ONBOARD_XEMBED=1
+CONSULTEASE_KEYBOARD=onboard
 CONSULTEASE_KEYBOARD_DEBUG=true
 MOZ_ENABLE_WAYLAND=1
 QT_IM_MODULE=wayland
@@ -623,14 +680,16 @@ CLUTTER_IM_MODULE=wayland
 EOF
 
 # Also add to .bashrc for immediate effect
-if ! grep -q "SQUEEKBOARD_FORCE" ~/.bashrc; then
+if ! grep -q "CONSULTEASE_KEYBOARD" ~/.bashrc; then
     echo "Adding environment variables to .bashrc..."
     cat >> ~/.bashrc << EOF
 
 # ConsultEase keyboard environment variables
 export GDK_BACKEND=wayland,x11
 export QT_QPA_PLATFORM=wayland;xcb
-export SQUEEKBOARD_FORCE=1
+export ONBOARD_ENABLE_TOUCH=1
+export ONBOARD_XEMBED=1
+export CONSULTEASE_KEYBOARD=onboard
 export CONSULTEASE_KEYBOARD_DEBUG=true
 export MOZ_ENABLE_WAYLAND=1
 export QT_IM_MODULE=wayland
@@ -644,13 +703,37 @@ echo "Creating keyboard management scripts..."
 # Create keyboard toggle script
 cat > ~/keyboard-toggle.sh << EOF
 #!/bin/bash
-# Toggle squeekboard visibility
-if dbus-send --print-reply --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.GetVisible | grep -q "boolean true"; then
-    dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:false
-    echo "Keyboard hidden"
+# Toggle on-screen keyboard visibility
+
+# Check for onboard first
+if command -v onboard &> /dev/null; then
+    if pgrep -f onboard > /dev/null; then
+        pkill -f onboard
+        echo "Onboard keyboard hidden"
+    else
+        onboard --size=small --layout=Phone --enable-background-transparency &
+        echo "Onboard keyboard shown"
+    fi
+# Check for squeekboard as fallback
+elif command -v dbus-send &> /dev/null; then
+    if dbus-send --print-reply --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.GetVisible | grep -q "boolean true"; then
+        dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:false
+        echo "Squeekboard hidden"
+    else
+        dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
+        echo "Squeekboard shown"
+    fi
+# Try matchbox as last resort
+elif command -v matchbox-keyboard &> /dev/null; then
+    if pgrep -f matchbox-keyboard > /dev/null; then
+        pkill -f matchbox-keyboard
+        echo "Matchbox keyboard hidden"
+    else
+        matchbox-keyboard &
+        echo "Matchbox keyboard shown"
+    fi
 else
-    dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
-    echo "Keyboard shown"
+    echo "No supported on-screen keyboard found"
 fi
 EOF
 chmod +x ~/keyboard-toggle.sh
@@ -658,33 +741,102 @@ chmod +x ~/keyboard-toggle.sh
 # Create keyboard show script
 cat > ~/keyboard-show.sh << EOF
 #!/bin/bash
-# Force show squeekboard
-dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
-echo "Keyboard shown"
+# Force show keyboard
+
+# Try onboard first
+if command -v onboard &> /dev/null; then
+    # Kill any existing instances
+    pkill -f onboard
+    # Start onboard with appropriate options
+    onboard --size=small --layout=Phone --enable-background-transparency --theme=Nightshade &
+    echo "Onboard keyboard shown"
+    exit 0
+fi
+
+# Try squeekboard as fallback
+if command -v dbus-send &> /dev/null; then
+    dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
+    echo "Squeekboard shown"
+    exit 0
+fi
+
+# Try matchbox as last resort
+if command -v matchbox-keyboard &> /dev/null; then
+    matchbox-keyboard &
+    echo "Matchbox keyboard shown"
+    exit 0
+fi
+
+echo "No supported on-screen keyboard found"
 EOF
 chmod +x ~/keyboard-show.sh
 
 # Create keyboard hide script
 cat > ~/keyboard-hide.sh << EOF
 #!/bin/bash
-# Force hide squeekboard
-dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:false
-echo "Keyboard hidden"
+# Force hide keyboard
+
+# Try onboard first
+if command -v onboard &> /dev/null; then
+    pkill -f onboard
+    echo "Onboard keyboard hidden"
+    exit 0
+fi
+
+# Try squeekboard as fallback
+if command -v dbus-send &> /dev/null; then
+    dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:false
+    echo "Squeekboard hidden"
+    exit 0
+fi
+
+# Try matchbox as last resort
+if command -v matchbox-keyboard &> /dev/null; then
+    pkill -f matchbox-keyboard
+    echo "Matchbox keyboard hidden"
+    exit 0
+fi
+
+echo "No supported on-screen keyboard found"
 EOF
 chmod +x ~/keyboard-hide.sh
 
 # Create keyboard status script
 cat > ~/keyboard-status.sh << EOF
 #!/bin/bash
-# Check squeekboard status
-echo "Squeekboard service status:"
-systemctl --user status squeekboard.service
+# Check keyboard status
 
-echo -e "\\nSqueekboard visibility:"
-if dbus-send --print-reply --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.GetVisible | grep -q "boolean true"; then
-    echo "Keyboard is VISIBLE"
-else
-    echo "Keyboard is HIDDEN"
+# Check for onboard
+if command -v onboard &> /dev/null; then
+    echo "Onboard status:"
+    if pgrep -f onboard > /dev/null; then
+        echo "Onboard is RUNNING"
+    else
+        echo "Onboard is NOT RUNNING"
+    fi
+fi
+
+# Check for squeekboard
+if command -v systemctl &> /dev/null && command -v dbus-send &> /dev/null; then
+    echo -e "\\nSqueekboard service status:"
+    systemctl --user status squeekboard.service 2>/dev/null || echo "Squeekboard service not found"
+
+    echo -e "\\nSqueekboard visibility:"
+    if dbus-send --print-reply --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.GetVisible 2>/dev/null | grep -q "boolean true"; then
+        echo "Squeekboard is VISIBLE"
+    else
+        echo "Squeekboard is HIDDEN or not available"
+    fi
+fi
+
+# Check for matchbox
+if command -v matchbox-keyboard &> /dev/null; then
+    echo -e "\\nMatchbox keyboard status:"
+    if pgrep -f matchbox-keyboard > /dev/null; then
+        echo "Matchbox keyboard is RUNNING"
+    else
+        echo "Matchbox keyboard is NOT RUNNING"
+    fi
 fi
 EOF
 chmod +x ~/keyboard-status.sh
@@ -692,35 +844,56 @@ chmod +x ~/keyboard-status.sh
 # Create keyboard restart script
 cat > ~/keyboard-restart.sh << EOF
 #!/bin/bash
-# Restart squeekboard service
-echo "Stopping squeekboard service..."
-systemctl --user stop squeekboard.service
+# Restart keyboard
 
-# Kill any remaining squeekboard processes
-pkill -f squeekboard
-
-# Wait a moment
-sleep 1
-
-# Start the service again
-echo "Starting squeekboard service..."
-systemctl --user start squeekboard.service
-
-# Wait for service to start
-sleep 2
-
-# Check if service is running
-if systemctl --user is-active squeekboard.service; then
-    echo "Squeekboard service restarted successfully"
-else
-    echo "Warning: Squeekboard service failed to restart. Starting manually..."
-    # Try starting squeekboard directly
-    nohup squeekboard > /dev/null 2>&1 &
+# Try onboard first
+if command -v onboard &> /dev/null; then
+    echo "Restarting onboard..."
+    pkill -f onboard
+    sleep 1
+    onboard --size=small --layout=Phone --enable-background-transparency --theme=Nightshade &
+    echo "Onboard restarted"
+    exit 0
 fi
 
-# Force show the keyboard
-dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
-echo "Keyboard shown"
+# Try squeekboard as fallback
+if command -v systemctl &> /dev/null; then
+    echo "Restarting squeekboard service..."
+    systemctl --user stop squeekboard.service 2>/dev/null
+    pkill -f squeekboard
+    sleep 1
+    systemctl --user start squeekboard.service 2>/dev/null
+
+    # Check if service is running
+    if systemctl --user is-active squeekboard.service 2>/dev/null; then
+        echo "Squeekboard service restarted successfully"
+    else
+        echo "Warning: Squeekboard service failed to restart. Starting manually..."
+        # Try starting squeekboard directly
+        if command -v squeekboard &> /dev/null; then
+            nohup squeekboard > /dev/null 2>&1 &
+        fi
+    fi
+
+    # Force show the keyboard
+    if command -v dbus-send &> /dev/null; then
+        dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
+        echo "Squeekboard shown"
+    fi
+    exit 0
+fi
+
+# Try matchbox as last resort
+if command -v matchbox-keyboard &> /dev/null; then
+    echo "Restarting matchbox-keyboard..."
+    pkill -f matchbox-keyboard
+    sleep 1
+    matchbox-keyboard &
+    echo "Matchbox keyboard restarted"
+    exit 0
+fi
+
+echo "No supported on-screen keyboard found"
 EOF
 chmod +x ~/keyboard-restart.sh
 

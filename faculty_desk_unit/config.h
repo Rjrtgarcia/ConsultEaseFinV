@@ -1,6 +1,6 @@
 /**
  * ConsultEase - Faculty Desk Unit Configuration
- * 
+ *
  * This file contains configuration settings for the Faculty Desk Unit.
  * Update these values to match your specific setup.
  */
@@ -13,14 +13,14 @@
 #define WIFI_PASSWORD "Admin123"
 
 // MQTT Configuration
-#define MQTT_SERVER "192.168.1.XXX"  // Replace with your Raspberry Pi IP address
+#define MQTT_SERVER "192.168.1.100"  // Replace with your actual Raspberry Pi IP address
 #define MQTT_PORT 1883
 #define MQTT_USERNAME ""  // Leave empty if not using authentication
 #define MQTT_PASSWORD ""  // Leave empty if not using authentication
 
 // Faculty Configuration
 #define FACULTY_ID 1  // This should match the faculty ID in the database
-#define FACULTY_NAME "Dr. John Smith"  // This should match the faculty name in the database
+#define FACULTY_NAME "Jeysibn"  // This should match the faculty name in the database
 #define FACULTY_DEPARTMENT "Computer Science"  // This should match the faculty department in the database
 
 // BLE Configuration

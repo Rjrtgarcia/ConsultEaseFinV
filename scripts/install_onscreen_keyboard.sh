@@ -2,7 +2,7 @@
 
 # Script to install required on-screen keyboard utilities for ConsultEase
 # This should be run on the Raspberry Pi device
-# Note: This script has been updated to prioritize onboard over squeekboard
+# Note: This script prioritizes onboard over squeekboard
 
 echo "Installing on-screen keyboard utilities for ConsultEase..."
 
@@ -19,13 +19,13 @@ if sudo apt install -y onboard; then
     echo "Onboard installed successfully."
 else
     echo "Onboard installation failed, trying alternative keyboards..."
-
+    
     # Try to install squeekboard (alternative)
     if sudo apt install -y squeekboard; then
         echo "Squeekboard installed successfully."
     else
         echo "Squeekboard installation failed, trying matchbox-keyboard..."
-
+        
         # Try to install matchbox-keyboard (fallback)
         if sudo apt install -y matchbox-keyboard; then
             echo "Matchbox-keyboard installed successfully."
@@ -51,10 +51,10 @@ Exec=onboard --size=small --layout=Phone --enable-background-transparency --them
 Comment=Flexible on-screen keyboard
 EOF
     echo "Onboard configured for auto-start."
-
+    
     # Create onboard configuration directory
     mkdir -p ~/.config/onboard
-
+    
     # Create onboard configuration file with touch-friendly settings
     cat > ~/.config/onboard/onboard.conf << EOF
 [main]
@@ -75,7 +75,7 @@ touch-feedback-enabled=true
 touch-feedback-size=small
 EOF
     echo "Onboard configured with touch-friendly settings."
-
+    
     # Set environment variables for onboard
     echo "Setting up environment variables for onboard..."
     mkdir -p ~/.config/environment.d/
@@ -87,7 +87,60 @@ GDK_BACKEND=wayland,x11
 QT_QPA_PLATFORM=wayland;xcb
 EOF
     echo "Environment variables set for onboard."
+    
+    # Add to .bashrc for immediate effect
+    if ! grep -q "ONBOARD_ENABLE_TOUCH" ~/.bashrc; then
+        echo "Adding environment variables to .bashrc..."
+        cat >> ~/.bashrc << EOF
+
+# ConsultEase keyboard environment variables
+export ONBOARD_ENABLE_TOUCH=1
+export ONBOARD_XEMBED=1
+export GDK_BACKEND=wayland,x11
+export QT_QPA_PLATFORM=wayland;xcb
+export CONSULTEASE_KEYBOARD=onboard
+EOF
+    fi
 fi
+
+# Create keyboard toggle script
+echo "Creating keyboard toggle script..."
+cat > ~/keyboard-toggle.sh << EOF
+#!/bin/bash
+# Toggle on-screen keyboard visibility
+
+# Check for onboard first
+if command -v onboard &> /dev/null; then
+    if pgrep -f onboard > /dev/null; then
+        pkill -f onboard
+        echo "Onboard keyboard hidden"
+    else
+        onboard --size=small --layout=Phone --enable-background-transparency &
+        echo "Onboard keyboard shown"
+    fi
+# Check for squeekboard
+elif command -v dbus-send &> /dev/null; then
+    if dbus-send --print-reply --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.GetVisible | grep -q "boolean true"; then
+        dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:false
+        echo "Squeekboard hidden"
+    else
+        dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
+        echo "Squeekboard shown"
+    fi
+# Try matchbox as last resort
+elif command -v matchbox-keyboard &> /dev/null; then
+    if pgrep -f matchbox-keyboard > /dev/null; then
+        pkill -f matchbox-keyboard
+        echo "Matchbox keyboard hidden"
+    else
+        matchbox-keyboard &
+        echo "Matchbox keyboard shown"
+    fi
+else
+    echo "No supported on-screen keyboard found"
+fi
+EOF
+chmod +x ~/keyboard-toggle.sh
 
 echo "Installation completed."
 echo "You may need to reboot your Raspberry Pi for all changes to take effect."

@@ -8,21 +8,22 @@
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <Adafruit_ST7789.h> // Hardware-specific library for ST7789
 #include <time.h>
+#include "config.h"          // Include configuration file
 
 // Current Date/Time and User
 const char* current_date_time = "2025-05-02 09:46:02";
-const char* current_user = "Jeysibn";
+const char* current_user = FACULTY_NAME;
 
 // WiFi credentials
-const char* ssid = "ConsultEase";
-const char* password = "Admin123";
+const char* ssid = WIFI_SSID;
+const char* password = WIFI_PASSWORD;
 
 // MQTT Broker settings
-const char* mqtt_server = "192.168.1.XXX"; // IP of Raspberry Pi
-const int mqtt_port = 1883;
-const char* mqtt_topic_messages = "professor/messages";
-const char* mqtt_topic_status = "professor/status";
-const char* mqtt_client_id = "DeskUnit_Jeysibn";
+const char* mqtt_server = MQTT_SERVER;
+const int mqtt_port = MQTT_PORT;
+char mqtt_topic_messages[50];
+char mqtt_topic_status[50];
+char mqtt_client_id[50];
 
 // BLE UUIDs
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -493,6 +494,16 @@ void setup() {
   Serial.print("Current time: ");
   Serial.println(current_date_time);
 
+  // Initialize MQTT topics with faculty ID
+  sprintf(mqtt_topic_messages, MQTT_TOPIC_REQUESTS, FACULTY_ID);
+  sprintf(mqtt_topic_status, MQTT_TOPIC_STATUS, FACULTY_ID);
+  sprintf(mqtt_client_id, "DeskUnit_%s", FACULTY_NAME);
+
+  Serial.print("MQTT topics initialized: ");
+  Serial.println(mqtt_topic_messages);
+  Serial.println(mqtt_topic_status);
+  Serial.println(mqtt_client_id);
+
   // Initialize SPI communication
   SPI.begin();
 
@@ -556,8 +567,12 @@ void setup() {
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(callback);
 
-  // Create the BLE Device
-  BLEDevice::init("ProfDeskUnit_Jeysibn");
+  // Create the BLE Device with faculty name
+  char ble_device_name[50];
+  sprintf(ble_device_name, "ProfDeskUnit_%s", FACULTY_NAME);
+  BLEDevice::init(ble_device_name);
+  Serial.print("BLE Device initialized: ");
+  Serial.println(ble_device_name);
 
   // Create the BLE Server
   pServer = BLEDevice::createServer();

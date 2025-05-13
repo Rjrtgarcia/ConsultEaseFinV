@@ -41,6 +41,17 @@ class MQTTService:
         self.reconnect_thread = None
         self.stop_reconnect = False
 
+        # Message storage for retry
+        self._last_message = None
+        self._last_raw_message = None
+
+        # Set up keep-alive timer
+        self.keep_alive_interval = 60  # seconds
+        self.last_keep_alive = time.time()
+
+        # Set up automatic reconnect
+        self.client.reconnect_delay_set(min_delay=1, max_delay=60)
+
     def connect(self):
         """
         Connect to the MQTT broker.
@@ -49,19 +60,92 @@ class MQTTService:
             logger.info(f"Connecting to MQTT broker at {self.broker_host}:{self.broker_port}")
             self.client.connect(self.broker_host, self.broker_port, 60)
             self.client.loop_start()
+
+            # Start keep-alive timer
+            self._start_keep_alive_timer()
         except Exception as e:
             logger.error(f"Failed to connect to MQTT broker: {str(e)}")
             self.schedule_reconnect()
 
+    def _start_keep_alive_timer(self):
+        """
+        Start a timer to periodically check the connection and send keep-alive pings.
+        """
+        # Create a timer thread that runs the keep-alive check
+        self.keep_alive_thread = threading.Thread(target=self._keep_alive_worker)
+        self.keep_alive_thread.daemon = True
+        self.keep_alive_thread.start()
+        logger.info("Started MQTT keep-alive timer")
+
+    def _keep_alive_worker(self):
+        """
+        Worker thread for sending keep-alive pings and checking connection status.
+        """
+        while True:
+            try:
+                # Sleep for the keep-alive interval
+                time.sleep(self.keep_alive_interval)
+
+                # Check if we're still connected
+                if not self.is_connected:
+                    logger.warning("Keep-alive check: Not connected to MQTT broker")
+                    self.schedule_reconnect()
+                    continue
+
+                # Send a ping to the broker
+                try:
+                    # Publish a small message to a system topic
+                    current_time = time.time()
+                    self.client.publish(
+                        "consultease/system/ping",
+                        json.dumps({"timestamp": current_time}),
+                        qos=0,
+                        retain=False
+                    )
+                    self.last_keep_alive = current_time
+                    logger.debug(f"Sent MQTT keep-alive ping at {current_time}")
+                except Exception as e:
+                    logger.error(f"Error sending MQTT keep-alive ping: {str(e)}")
+                    # If we can't send a ping, we might be disconnected
+                    if self.is_connected:
+                        logger.warning("Connection may be lost, scheduling reconnect")
+                        self.schedule_reconnect()
+            except Exception as e:
+                logger.error(f"Error in MQTT keep-alive worker: {str(e)}")
+                # Sleep a bit to avoid tight loop if there's an error
+                time.sleep(5)
+
     def disconnect(self):
         """
-        Disconnect from the MQTT broker.
+        Disconnect from the MQTT broker and clean up resources.
         """
         logger.info("Disconnecting from MQTT broker")
+
+        # Stop reconnection attempts
         self.stop_reconnect = True
-        self.client.loop_stop()
+
+        # Wait for reconnect thread to finish if it's running
+        if self.reconnect_thread and self.reconnect_thread.is_alive():
+            logger.info("Waiting for reconnect thread to finish...")
+            # We don't join the thread as it might be blocked, but we set the flag to stop it
+
+        # Stop the MQTT client loop
+        try:
+            self.client.loop_stop()
+            logger.info("Stopped MQTT client loop")
+        except Exception as e:
+            logger.error(f"Error stopping MQTT client loop: {str(e)}")
+
+        # Disconnect from broker if connected
         if self.is_connected:
-            self.client.disconnect()
+            try:
+                self.client.disconnect()
+                logger.info("Disconnected from MQTT broker")
+            except Exception as e:
+                logger.error(f"Error disconnecting from MQTT broker: {str(e)}")
+
+        # Reset connection state
+        self.is_connected = False
 
     def on_connect(self, client, userdata, flags, rc):
         """
@@ -82,10 +166,16 @@ class MQTTService:
         """
         Callback when disconnected from the MQTT broker.
         """
+        previous_state = self.is_connected
         self.is_connected = False
+
         if rc != 0:
             logger.warning(f"Unexpected disconnection from MQTT broker with code {rc}")
-            self.schedule_reconnect()
+            # Only schedule reconnect if we were previously connected
+            # This prevents multiple reconnect attempts
+            if previous_state:
+                logger.info("Scheduling reconnection attempt...")
+                self.schedule_reconnect()
         else:
             logger.info("Disconnected from MQTT broker")
 
@@ -147,11 +237,28 @@ class MQTTService:
         Returns:
             bool: True if publishing was successful, False otherwise
         """
+        # Store the message for potential retry
+        self._store_last_message(topic, data, qos, retain)
+
+        # Check connection status
         if not self.is_connected:
             logger.warning(f"Cannot publish to {topic}: Not connected to MQTT broker")
             # Try to reconnect
             self.schedule_reconnect()
-            return False
+
+            # For important messages, wait briefly for reconnection
+            if qos > 0:
+                logger.info(f"Waiting briefly for reconnection to send important message (QoS {qos})")
+                for _ in range(10):  # Wait up to 5 seconds
+                    time.sleep(0.5)
+                    if self.is_connected:
+                        logger.info("Reconnected, proceeding with publish")
+                        break
+                else:
+                    logger.warning("Reconnection timeout, message will be queued for later delivery")
+                    return False
+            else:
+                return False
 
         try:
             # Format the payload for the faculty desk unit
@@ -167,11 +274,42 @@ class MQTTService:
             # Try to publish with retries
             for attempt in range(max_retries):
                 try:
+                    # Check connection again before each attempt
+                    if not self.is_connected and attempt > 0:
+                        logger.warning(f"Lost connection during publish attempts to {topic}")
+                        self.schedule_reconnect()
+                        time.sleep(min(2 ** attempt, 10))  # Exponential backoff, max 10 seconds
+                        if not self.is_connected:
+                            continue
+
+                    # Publish the message
                     result = self.client.publish(topic, payload, qos=qos, retain=retain)
 
                     # Check if the publish was successful
                     if result.rc == mqtt.MQTT_ERR_SUCCESS:
-                        logger.debug(f"Published message to {topic}: {payload}")
+                        # For QoS 1 and 2, wait for the message to be delivered
+                        if qos > 0:
+                            try:
+                                # Wait for message to be delivered
+                                message_info = result
+                                if not message_info.is_published():
+                                    message_info.wait_for_publish(timeout=5.0)
+
+                                if message_info.is_published():
+                                    logger.debug(f"Published message to {topic} (QoS {qos}) and confirmed delivery")
+                                else:
+                                    logger.warning(f"Message to {topic} (QoS {qos}) may not have been delivered")
+                                    # Try again if we haven't reached max retries
+                                    if attempt < max_retries - 1:
+                                        continue
+                            except Exception as e:
+                                logger.error(f"Error waiting for message delivery to {topic}: {str(e)}")
+                                # Try again if we haven't reached max retries
+                                if attempt < max_retries - 1:
+                                    continue
+                        else:
+                            logger.debug(f"Published message to {topic}")
+
                         return True
                     else:
                         logger.warning(f"Failed to publish message to {topic} (attempt {attempt+1}/{max_retries}): MQTT error code {result.rc}")
@@ -179,10 +317,10 @@ class MQTTService:
                         # If we're not connected, try to reconnect
                         if not self.is_connected:
                             self.schedule_reconnect()
-                            time.sleep(1)  # Wait a bit before retrying
+                            time.sleep(min(2 ** attempt, 10))  # Exponential backoff, max 10 seconds
                 except Exception as e:
                     logger.error(f"Error publishing message to {topic} (attempt {attempt+1}/{max_retries}): {str(e)}")
-                    time.sleep(0.5)  # Short delay before retry
+                    time.sleep(min(2 ** attempt, 10))  # Exponential backoff, max 10 seconds
 
             # If we get here, all retries failed
             logger.error(f"Failed to publish message to {topic} after {max_retries} attempts")
@@ -191,6 +329,25 @@ class MQTTService:
         except Exception as e:
             logger.error(f"Failed to prepare message for {topic}: {str(e)}")
             return False
+
+    def _store_last_message(self, topic, data, qos, retain):
+        """
+        Store the last message for potential retry.
+
+        Args:
+            topic (str): MQTT topic
+            data (dict): Message data
+            qos (int): Quality of Service level
+            retain (bool): Whether to retain the message
+        """
+        # Store in instance variable for potential retry
+        self._last_message = {
+            'topic': topic,
+            'data': data,
+            'qos': qos,
+            'retain': retain,
+            'timestamp': time.time()
+        }
 
     def publish_raw(self, topic, message, qos=0, retain=False, max_retries=3):
         """
@@ -207,21 +364,69 @@ class MQTTService:
         Returns:
             bool: True if publishing was successful, False otherwise
         """
+        # Store the message for potential retry
+        self._store_last_raw_message(topic, message, qos, retain)
+
+        # Check connection status
         if not self.is_connected:
-            logger.warning(f"Cannot publish to {topic}: Not connected to MQTT broker")
+            logger.warning(f"Cannot publish raw message to {topic}: Not connected to MQTT broker")
             # Try to reconnect
             self.schedule_reconnect()
-            return False
+
+            # For important messages, wait briefly for reconnection
+            if qos > 0:
+                logger.info(f"Waiting briefly for reconnection to send important raw message (QoS {qos})")
+                for _ in range(10):  # Wait up to 5 seconds
+                    time.sleep(0.5)
+                    if self.is_connected:
+                        logger.info("Reconnected, proceeding with raw publish")
+                        break
+                else:
+                    logger.warning("Reconnection timeout, raw message will be queued for later delivery")
+                    return False
+            else:
+                return False
 
         try:
             # Try to publish with retries
             for attempt in range(max_retries):
                 try:
+                    # Check connection again before each attempt
+                    if not self.is_connected and attempt > 0:
+                        logger.warning(f"Lost connection during raw publish attempts to {topic}")
+                        self.schedule_reconnect()
+                        time.sleep(min(2 ** attempt, 10))  # Exponential backoff, max 10 seconds
+                        if not self.is_connected:
+                            continue
+
+                    # Publish the message
                     result = self.client.publish(topic, message, qos=qos, retain=retain)
 
                     # Check if the publish was successful
                     if result.rc == mqtt.MQTT_ERR_SUCCESS:
-                        logger.debug(f"Published raw message to {topic}: {message}")
+                        # For QoS 1 and 2, wait for the message to be delivered
+                        if qos > 0:
+                            try:
+                                # Wait for message to be delivered
+                                message_info = result
+                                if not message_info.is_published():
+                                    message_info.wait_for_publish(timeout=5.0)
+
+                                if message_info.is_published():
+                                    logger.debug(f"Published raw message to {topic} (QoS {qos}) and confirmed delivery")
+                                else:
+                                    logger.warning(f"Raw message to {topic} (QoS {qos}) may not have been delivered")
+                                    # Try again if we haven't reached max retries
+                                    if attempt < max_retries - 1:
+                                        continue
+                            except Exception as e:
+                                logger.error(f"Error waiting for raw message delivery to {topic}: {str(e)}")
+                                # Try again if we haven't reached max retries
+                                if attempt < max_retries - 1:
+                                    continue
+                        else:
+                            logger.debug(f"Published raw message to {topic}")
+
                         return True
                     else:
                         logger.warning(f"Failed to publish raw message to {topic} (attempt {attempt+1}/{max_retries}): MQTT error code {result.rc}")
@@ -229,10 +434,10 @@ class MQTTService:
                         # If we're not connected, try to reconnect
                         if not self.is_connected:
                             self.schedule_reconnect()
-                            time.sleep(1)  # Wait a bit before retrying
+                            time.sleep(min(2 ** attempt, 10))  # Exponential backoff, max 10 seconds
                 except Exception as e:
                     logger.error(f"Error publishing raw message to {topic} (attempt {attempt+1}/{max_retries}): {str(e)}")
-                    time.sleep(0.5)  # Short delay before retry
+                    time.sleep(min(2 ** attempt, 10))  # Exponential backoff, max 10 seconds
 
             # If we get here, all retries failed
             logger.error(f"Failed to publish raw message to {topic} after {max_retries} attempts")
@@ -241,6 +446,25 @@ class MQTTService:
         except Exception as e:
             logger.error(f"Failed to prepare raw message for {topic}: {str(e)}")
             return False
+
+    def _store_last_raw_message(self, topic, message, qos, retain):
+        """
+        Store the last raw message for potential retry.
+
+        Args:
+            topic (str): MQTT topic
+            message (str): Raw message
+            qos (int): Quality of Service level
+            retain (bool): Whether to retain the message
+        """
+        # Store in instance variable for potential retry
+        self._last_raw_message = {
+            'topic': topic,
+            'message': message,
+            'qos': qos,
+            'retain': retain,
+            'timestamp': time.time()
+        }
 
     def _format_for_faculty_desk_unit(self, data):
         """
@@ -300,27 +524,62 @@ class MQTTService:
         current_delay = self.reconnect_delay
         max_delay = 60  # Maximum delay in seconds
         attempt = 1
+        max_attempts = 20  # Maximum number of attempts before giving up temporarily
 
         while not self.stop_reconnect and not self.is_connected:
-            logger.info(f"Attempting to reconnect to MQTT broker in {current_delay} seconds (attempt {attempt})")
-            time.sleep(current_delay)
+            logger.info(f"Attempting to reconnect to MQTT broker in {current_delay} seconds (attempt {attempt}/{max_attempts})")
+
+            # Sleep in smaller increments to check stop_reconnect more frequently
+            for _ in range(int(current_delay * 2)):
+                if self.stop_reconnect:
+                    break
+                time.sleep(0.5)  # Sleep for 0.5 seconds at a time
 
             if self.stop_reconnect:
+                logger.info("Reconnection attempts stopped by request")
+                break
+
+            # Check if we're already connected (might have happened in another thread)
+            if self.is_connected:
+                logger.info("Already reconnected to MQTT broker")
                 break
 
             try:
                 # Try to reconnect
                 logger.info(f"Reconnecting to MQTT broker at {self.broker_host}:{self.broker_port}")
-                self.client.reconnect()
+
+                # Instead of just reconnect, we'll do a full disconnect/connect cycle
+                try:
+                    # First try to disconnect cleanly if we think we're connected
+                    self.client.disconnect()
+                except Exception:
+                    # Ignore errors during disconnect
+                    pass
+
+                # Wait a moment for the disconnect to complete
+                time.sleep(1)
+
+                # Now try to connect fresh
+                self.client.connect(self.broker_host, self.broker_port, 60)
 
                 # If we get here without exception, we're connected
                 logger.info("Successfully reconnected to MQTT broker")
 
+                # Resubscribe to all topics
+                for topic in self.topic_handlers.keys():
+                    self.client.subscribe(topic)
+                    logger.info(f"Resubscribed to {topic}")
+
                 # Reset delay for next time
                 current_delay = self.reconnect_delay
                 attempt = 1
+
+                # Ensure loop is running
+                if not self.client.is_connected():
+                    self.client.loop_start()
+
             except Exception as e:
-                logger.error(f"Failed to reconnect to MQTT broker (attempt {attempt}): {str(e)}")
+                logger.error(f"Failed to reconnect to MQTT broker (attempt {attempt}/{max_attempts}): {str(e)}")
 
                 # Increase delay with exponential backoff, but cap at max_delay
                 current_delay = min(current_delay * 1.5, max_delay)
@@ -332,6 +591,12 @@ class MQTTService:
                         f"Multiple failed attempts to connect to MQTT broker. "
                         f"Please check network connectivity and broker status."
                     )
+
+                # If we've reached max attempts, take a longer break before trying again
+                if attempt >= max_attempts:
+                    logger.critical(f"Reached maximum reconnection attempts ({max_attempts}). Taking a longer break before trying again.")
+                    time.sleep(300)  # 5 minute break
+                    attempt = 1  # Reset attempt counter
 
 # Singleton instance
 mqtt_service = None

@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QPushButton, QGridLayout, QScrollArea, QFrame,
                                QLineEdit, QTextEdit, QComboBox, QMessageBox,
-                               QSplitter)
+                               QSplitter, QApplication)
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSize
 from PyQt5.QtGui import QIcon, QColor, QPixmap
 
@@ -367,9 +367,23 @@ class DashboardWindow(BaseWindow):
         welcome_label.setStyleSheet("font-size: 24pt; font-weight: bold;")
         header_layout.addWidget(welcome_label)
 
-        # Logout button
+        # Logout button - more touch-friendly
         logout_button = QPushButton("Logout")
-        logout_button.setFixedWidth(100)
+        logout_button.setMinimumWidth(120)
+        logout_button.setMinimumHeight(40)
+        logout_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                border-radius: 5px;
+                font-size: 14pt;
+                font-weight: bold;
+                padding: 5px 15px;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+        """)
         logout_button.clicked.connect(self.logout)
         header_layout.addWidget(logout_button)
 
@@ -378,32 +392,93 @@ class DashboardWindow(BaseWindow):
         # Main content with faculty grid and consultation form
         content_splitter = QSplitter(Qt.Horizontal)
 
+        # Get screen size to set proportional initial sizes
+        screen_size = QApplication.desktop().screenGeometry()
+        screen_width = screen_size.width()
+
         # Faculty availability grid
         faculty_widget = QWidget()
         faculty_layout = QVBoxLayout(faculty_widget)
 
-        # Search and filter controls
+        # Search and filter controls in a more touch-friendly layout
         filter_layout = QHBoxLayout()
+        filter_layout.setSpacing(10)
 
-        search_label = QLabel("Search:")
-        search_label.setFixedWidth(80)
-        filter_layout.addWidget(search_label)
+        # Search input with icon and better styling
+        search_frame = QFrame()
+        search_frame.setStyleSheet("""
+            QFrame {
+                background-color: white;
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                padding: 2px;
+            }
+        """)
+        search_layout = QHBoxLayout(search_frame)
+        search_layout.setContentsMargins(5, 0, 5, 0)
+        search_layout.setSpacing(5)
+
+        search_icon = QLabel()
+        try:
+            search_icon_pixmap = QPixmap("resources/icons/search.png")
+            if not search_icon_pixmap.isNull():
+                search_icon.setPixmap(search_icon_pixmap.scaled(16, 16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        except:
+            # If icon not available, use text
+            search_icon.setText("🔍")
+
+        search_layout.addWidget(search_icon)
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search by name or department")
+        self.search_input.setStyleSheet("""
+            QLineEdit {
+                border: none;
+                padding: 5px;
+                font-size: 12pt;
+            }
+        """)
         self.search_input.textChanged.connect(self.filter_faculty)
-        filter_layout.addWidget(self.search_input)
+        search_layout.addWidget(self.search_input)
+
+        filter_layout.addWidget(search_frame, 3)  # Give search more space
+
+        # Filter dropdown with better styling
+        filter_frame = QFrame()
+        filter_frame.setStyleSheet("""
+            QFrame {
+                background-color: white;
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                padding: 2px;
+            }
+        """)
+        filter_inner_layout = QHBoxLayout(filter_frame)
+        filter_inner_layout.setContentsMargins(5, 0, 5, 0)
+        filter_inner_layout.setSpacing(5)
 
         filter_label = QLabel("Filter:")
-        filter_label.setFixedWidth(80)
-        filter_layout.addWidget(filter_label)
+        filter_label.setStyleSheet("font-size: 12pt;")
+        filter_inner_layout.addWidget(filter_label)
 
         self.filter_combo = QComboBox()
         self.filter_combo.addItem("All", None)
         self.filter_combo.addItem("Available Only", True)
         self.filter_combo.addItem("Unavailable Only", False)
+        self.filter_combo.setStyleSheet("""
+            QComboBox {
+                border: none;
+                padding: 5px;
+                font-size: 12pt;
+            }
+            QComboBox::drop-down {
+                width: 20px;
+            }
+        """)
         self.filter_combo.currentIndexChanged.connect(self.filter_faculty)
-        filter_layout.addWidget(self.filter_combo)
+        filter_inner_layout.addWidget(self.filter_combo)
+
+        filter_layout.addWidget(filter_frame, 2)  # Give filter less space
 
         faculty_layout.addLayout(filter_layout)
 
@@ -429,7 +504,9 @@ class DashboardWindow(BaseWindow):
         # Add widgets to splitter
         content_splitter.addWidget(faculty_widget)
         content_splitter.addWidget(self.consultation_panel)
-        content_splitter.setSizes([500, 500])
+
+        # Set splitter sizes proportionally to screen width
+        content_splitter.setSizes([int(screen_width * 0.6), int(screen_width * 0.4)])
 
         main_layout.addWidget(content_splitter)
 
@@ -451,9 +528,17 @@ class DashboardWindow(BaseWindow):
             if item.widget():
                 item.widget().deleteLater()
 
+        # Calculate optimal number of columns based on screen width
+        screen_width = QApplication.desktop().screenGeometry().width()
+        card_width = 250  # Approximate width of a faculty card
+        spacing = 20  # Grid spacing
+
+        # Calculate how many cards can fit in a row
+        available_width = screen_width * 0.6  # 60% of screen for faculty grid
+        max_cols = max(1, int(available_width / (card_width + spacing)))
+
         # Add faculty cards to grid
         row, col = 0, 0
-        max_cols = 3  # Number of columns in the grid
 
         for faculty in faculties:
             card = FacultyCard(faculty)
@@ -464,6 +549,19 @@ class DashboardWindow(BaseWindow):
             if col >= max_cols:
                 col = 0
                 row += 1
+
+        # If no faculty found, show a message
+        if not faculties:
+            no_results = QLabel("No faculty members found matching your criteria")
+            no_results.setStyleSheet("""
+                font-size: 14pt;
+                color: #7f8c8d;
+                padding: 20px;
+                background-color: #f5f5f5;
+                border-radius: 10px;
+            """)
+            no_results.setAlignment(Qt.AlignCenter)
+            self.faculty_grid.addWidget(no_results, 0, 0)
 
     def filter_faculty(self):
         """
