@@ -4,6 +4,8 @@ import logging
 import threading
 import time
 import os
+import configparser
+import pathlib
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -15,12 +17,18 @@ class MQTTService:
     """
 
     def __init__(self):
-        # MQTT settings
-        self.broker_host = os.environ.get('MQTT_BROKER_HOST', 'localhost')
-        self.broker_port = int(os.environ.get('MQTT_BROKER_PORT', 1883))
+        # Load settings from settings.ini if available
+        self._load_settings()
+
+        # MQTT settings (use settings from file or fall back to environment variables)
+        self.broker_host = self.settings.get('broker_host', os.environ.get('MQTT_BROKER_HOST', 'localhost'))
+        self.broker_port = int(self.settings.get('broker_port', os.environ.get('MQTT_BROKER_PORT', 1883)))
         self.client_id = "central_system"
         self.username = os.environ.get('MQTT_USERNAME', None)
         self.password = os.environ.get('MQTT_PASSWORD', None)
+
+        # Log the MQTT broker settings
+        logger.info(f"MQTT broker settings: {self.broker_host}:{self.broker_port}")
 
         # Initialize MQTT client
         self.client = mqtt.Client(client_id=self.client_id)
@@ -465,6 +473,32 @@ class MQTTService:
             'retain': retain,
             'timestamp': time.time()
         }
+
+    def _load_settings(self):
+        """
+        Load settings from settings.ini file if available.
+        """
+        self.settings = {}
+
+        try:
+            # Get the path to the settings.ini file
+            settings_path = pathlib.Path(__file__).parent.parent / "settings.ini"
+
+            if settings_path.exists():
+                logger.info(f"Loading settings from {settings_path}")
+                config = configparser.ConfigParser()
+                config.read(settings_path)
+
+                # Load MQTT settings
+                if 'MQTT' in config:
+                    self.settings['broker_host'] = config['MQTT'].get('broker_host', 'localhost')
+                    self.settings['broker_port'] = config['MQTT'].get('broker_port', '1883')
+                    logger.info(f"Loaded MQTT settings from file: {self.settings['broker_host']}:{self.settings['broker_port']}")
+            else:
+                logger.warning(f"Settings file not found at {settings_path}, using default values")
+        except Exception as e:
+            logger.error(f"Error loading settings: {str(e)}")
+            # Continue with default settings
 
     def _format_for_faculty_desk_unit(self, data):
         """

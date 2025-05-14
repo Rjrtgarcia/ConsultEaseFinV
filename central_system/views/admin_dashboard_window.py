@@ -1402,7 +1402,9 @@ class SystemMaintenanceTab(QWidget):
     """
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.consultation_controller = None
         self.init_ui()
+        self.load_faculty_list()
 
     def init_ui(self):
         """
@@ -1437,6 +1439,27 @@ class SystemMaintenanceTab(QWidget):
 
         logs_group.setLayout(logs_layout)
         main_layout.addWidget(logs_group)
+
+        # Faculty Desk Unit section
+        faculty_desk_group = QGroupBox("Faculty Desk Unit")
+        faculty_desk_layout = QVBoxLayout()
+
+        # Add a dropdown to select faculty
+        faculty_layout = QHBoxLayout()
+        faculty_label = QLabel("Select Faculty:")
+        self.faculty_combo = QComboBox()
+        self.faculty_combo.setMinimumWidth(200)
+        faculty_layout.addWidget(faculty_label)
+        faculty_layout.addWidget(self.faculty_combo)
+        faculty_desk_layout.addLayout(faculty_layout)
+
+        # Add a button to test the connection
+        test_connection_button = QPushButton("Test Faculty Desk Connection")
+        test_connection_button.clicked.connect(self.test_faculty_desk_connection)
+        faculty_desk_layout.addWidget(test_connection_button)
+
+        faculty_desk_group.setLayout(faculty_desk_layout)
+        main_layout.addWidget(faculty_desk_group)
 
         # System settings section
         settings_group = QGroupBox("System Settings")
@@ -1682,6 +1705,86 @@ class SystemMaintenanceTab(QWidget):
         log_dialog = LogViewerDialog(self)
         log_dialog.exec_()
 
+    def load_faculty_list(self):
+        """
+        Load the list of faculty members into the dropdown.
+        """
+        try:
+            # Import the faculty controller
+            from ..controllers import FacultyController
+            faculty_controller = FacultyController()
+
+            # Get all faculty members
+            faculties = faculty_controller.get_all_faculty()
+
+            # Clear the dropdown
+            self.faculty_combo.clear()
+
+            # Add faculty members to the dropdown
+            for faculty in faculties:
+                self.faculty_combo.addItem(f"{faculty.name} (ID: {faculty.id})", faculty.id)
+
+            logger.info(f"Loaded {len(faculties)} faculty members into dropdown")
+        except Exception as e:
+            logger.error(f"Error loading faculty list: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to load faculty list: {str(e)}")
+
+    def test_faculty_desk_connection(self):
+        """
+        Test the connection to the selected faculty desk unit.
+        """
+        try:
+            # Get the selected faculty ID
+            if self.faculty_combo.count() == 0:
+                QMessageBox.warning(self, "Test Connection", "No faculty members available. Please add faculty members first.")
+                return
+
+            faculty_id = self.faculty_combo.currentData()
+            faculty_name = self.faculty_combo.currentText().split(" (ID:")[0]
+
+            if not faculty_id:
+                QMessageBox.warning(self, "Test Connection", "Please select a faculty member.")
+                return
+
+            # Import the consultation controller if not already imported
+            if not self.consultation_controller:
+                from ..controllers import ConsultationController
+                self.consultation_controller = ConsultationController()
+
+            # Show a progress dialog
+            progress_dialog = QMessageBox(self)
+            progress_dialog.setWindowTitle("Testing Connection")
+            progress_dialog.setText(f"Sending test message to faculty desk unit for {faculty_name}...\nPlease check the faculty desk unit display.")
+            progress_dialog.setStandardButtons(QMessageBox.NoButton)
+            progress_dialog.show()
+            QApplication.processEvents()
+
+            # Send a test message
+            success = self.consultation_controller.test_faculty_desk_connection(faculty_id)
+
+            # Close the progress dialog
+            progress_dialog.close()
+
+            if success:
+                QMessageBox.information(self, "Test Connection",
+                    f"Test message sent successfully to faculty desk unit for {faculty_name}.\n\n"
+                    f"If the faculty desk unit did not receive the message, please check:\n"
+                    f"1. The faculty desk unit is powered on and connected to WiFi\n"
+                    f"2. The MQTT broker is running and accessible\n"
+                    f"3. The faculty ID in the faculty desk unit matches the faculty ID in the database\n"
+                    f"4. The MQTT topics are correctly configured")
+            else:
+                QMessageBox.warning(self, "Test Connection",
+                    f"Failed to send test message to faculty desk unit for {faculty_name}.\n\n"
+                    f"Please check:\n"
+                    f"1. The MQTT broker is running and accessible\n"
+                    f"2. The MQTT broker host and port are correctly configured\n"
+                    f"3. The network connection is working")
+
+        except Exception as e:
+            logger.error(f"Error testing faculty desk connection: {str(e)}")
+            QMessageBox.critical(self, "Test Connection", f"Error testing faculty desk connection: {str(e)}")
+
     def save_settings(self):
         """
         Save system settings.
@@ -1716,6 +1819,9 @@ class SystemMaintenanceTab(QWidget):
             os.environ['MQTT_BROKER_PORT'] = mqtt_port
 
             QMessageBox.information(self, "Save Settings", "Settings saved successfully.\nSome settings may require an application restart to take effect.")
+
+            # Reload the faculty list after settings change
+            self.load_faculty_list()
 
         except Exception as e:
             logger.error(f"Error saving settings: {str(e)}")

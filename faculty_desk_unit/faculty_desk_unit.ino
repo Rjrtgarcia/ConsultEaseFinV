@@ -104,6 +104,85 @@ class MyServerCallbacks: public BLEServerCallbacks {
     }
 };
 
+// Function to process incoming messages and extract content from JSON if needed
+String processMessage(String message) {
+  // Check if the message is in JSON format (starts with '{')
+  if (message.startsWith("{")) {
+    Serial.println("Detected JSON message, attempting to extract content");
+
+    // First try to extract the message field
+    int messageStart = message.indexOf("\"message\":\"");
+    if (messageStart > 0) {
+      messageStart += 11; // Length of "message":"
+      int messageEnd = message.indexOf("\"", messageStart);
+      if (messageEnd > messageStart) {
+        String extractedMessage = message.substring(messageStart, messageEnd);
+        // Replace escaped quotes and newlines
+        extractedMessage.replace("\\\"", "\"");
+        extractedMessage.replace("\\n", "\n");
+        Serial.print("Extracted message field: ");
+        Serial.println(extractedMessage);
+        return extractedMessage;
+      }
+    }
+
+    // If message field not found, try to extract request_message field
+    messageStart = message.indexOf("\"request_message\":\"");
+    if (messageStart > 0) {
+      messageStart += 18; // Length of "request_message":"
+      int messageEnd = message.indexOf("\"", messageStart);
+      if (messageEnd > messageStart) {
+        String extractedMessage = message.substring(messageStart, messageEnd);
+        // Replace escaped quotes and newlines
+        extractedMessage.replace("\\\"", "\"");
+        extractedMessage.replace("\\n", "\n");
+
+        // Try to get student name and course code to format a complete message
+        String studentName = "";
+        int studentStart = message.indexOf("\"student_name\":\"");
+        if (studentStart > 0) {
+          studentStart += 16; // Length of "student_name":"
+          int studentEnd = message.indexOf("\"", studentStart);
+          if (studentEnd > studentStart) {
+            studentName = message.substring(studentStart, studentEnd);
+          }
+        }
+
+        String courseCode = "";
+        int courseStart = message.indexOf("\"course_code\":\"");
+        if (courseStart > 0) {
+          courseStart += 14; // Length of "course_code":"
+          int courseEnd = message.indexOf("\"", courseStart);
+          if (courseEnd > courseStart) {
+            courseCode = message.substring(courseStart, courseEnd);
+          }
+        }
+
+        // Format a complete message
+        String formattedMessage = "";
+        if (studentName != "") {
+          formattedMessage += "Student: " + studentName + "\n";
+        }
+        if (courseCode != "") {
+          formattedMessage += "Course: " + courseCode + "\n";
+        }
+        formattedMessage += "Request: " + extractedMessage;
+
+        Serial.print("Formatted message: ");
+        Serial.println(formattedMessage);
+        return formattedMessage;
+      }
+    }
+
+    // If no specific message field found, return the whole JSON for debugging
+    Serial.println("No message field found in JSON, displaying raw JSON");
+    return message;
+  }
+
+  // If not JSON, return the original message
+  return message;
+}
+
 // Function to draw the continuous gold accent bar
 void drawGoldAccent() {
   // Draw gold accent that spans the entire height except status bar
@@ -288,8 +367,33 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
   Serial.println(message);
 
-  // Display the message on TFT
+  // Enhanced debug output
+  Serial.println("Message details:");
+  Serial.print("Topic: ");
+  Serial.println(topic);
+  Serial.print("Length: ");
+  Serial.println(length);
+  Serial.print("Content: ");
+  Serial.println(message);
+
+  // Process the message based on format
+  message = processMessage(message);
+
+  // Display the message on TFT with visual notification
   displayMessage(message);
+  displaySystemStatus("New message received");
+
+  // Flash the screen briefly to draw attention to the new message
+  for (int i = 0; i < 3; i++) {
+    // Flash the header area
+    tft.fillRect(ACCENT_WIDTH, 0, tft.width() - ACCENT_WIDTH, HEADER_HEIGHT, COLOR_ACCENT);
+    delay(100);
+    tft.fillRect(ACCENT_WIDTH, 0, tft.width() - ACCENT_WIDTH, HEADER_HEIGHT, COLOR_HEADER);
+    delay(100);
+  }
+
+  // Restore the time display
+  updateTimeDisplay();
 
   // Also forward to connected BLE device if any
   if (deviceConnected) {
@@ -421,8 +525,12 @@ void reconnect() {
     if (mqttClient.connect(clientId.c_str())) {
       Serial.println("connected");
       displaySystemStatus("MQTT connected");
-      // Subscribe to message topic
+      // Subscribe to message topics (both the faculty-specific topic and the legacy topic)
       mqttClient.subscribe(mqtt_topic_messages);
+      mqttClient.subscribe("professor/messages");  // Subscribe to alternative topic for backward compatibility
+      Serial.println("Subscribed to topics:");
+      Serial.println(mqtt_topic_messages);
+      Serial.println("professor/messages");
 
       // Display a brief confirmation in message area - preserve gold accent
       tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, 40, COLOR_MESSAGE_BG);
@@ -643,10 +751,24 @@ void setup() {
 }
 
 void loop() {
-  // MQTT connection management
-  if (!mqttClient.connected()) {
-    reconnect();
+  // MQTT connection management with improved reliability
+  static unsigned long lastMqttCheckTime = 0;
+  unsigned long currentMillis = millis();
+
+  // Check MQTT connection every 5 seconds
+  if (!mqttClient.connected() || (currentMillis - lastMqttCheckTime > 5000)) {
+    lastMqttCheckTime = currentMillis;
+
+    if (!mqttClient.connected()) {
+      Serial.println("MQTT disconnected, attempting to reconnect...");
+      reconnect();
+    } else {
+      // Periodically check if we're still receiving messages by pinging the broker
+      mqttClient.publish("consultease/system/ping", "ping");
+    }
   }
+
+  // Process MQTT messages
   mqttClient.loop();
 
   // BLE connection management
@@ -695,8 +817,7 @@ void loop() {
     oldDeviceConnected = deviceConnected;
   }
 
-  // Get current time for all time-based operations
-  unsigned long currentMillis = millis();
+  // currentMillis is already defined at the beginning of the loop
 
   // Periodically refresh the current connection status
   static unsigned long lastStatusUpdateTime = 0;

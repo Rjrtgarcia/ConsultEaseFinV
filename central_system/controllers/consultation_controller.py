@@ -123,7 +123,11 @@ class ConsultationController:
                 'request_message': consultation.request_message,
                 'course_code': consultation.course_code,
                 'status': consultation.status.value,
-                'requested_at': consultation.requested_at.isoformat() if consultation.requested_at else None
+                'requested_at': consultation.requested_at.isoformat() if consultation.requested_at else None,
+                # Add message field for easier extraction by faculty desk unit
+                'message': f"Student: {consultation.student.name}\n" +
+                          (f"Course: {consultation.course_code}\n" if consultation.course_code else "") +
+                          f"Request: {consultation.request_message}"
             }
 
             # Publish to faculty-specific topic
@@ -148,10 +152,20 @@ class ConsultationController:
             message += f"Request: {consultation.request_message}"
 
             # Publish the message directly (not as JSON) to match the faculty desk unit code
-            self.mqtt_service.publish_raw(alt_topic, message)
-            logger.info(f"Published consultation request to faculty desk unit topic {alt_topic}")
+            success_alt = self.mqtt_service.publish_raw(alt_topic, message)
 
-            return True
+            if success_alt:
+                logger.info(f"Published consultation request to faculty desk unit topic {alt_topic}")
+            else:
+                logger.error(f"Failed to publish consultation request to faculty desk unit topic {alt_topic}")
+
+            # Try publishing to the faculty-specific topic in plain text format as well
+            # This provides maximum compatibility
+            alt_topic_faculty = f"consultease/faculty/{consultation.faculty_id}/messages"
+            self.mqtt_service.publish_raw(alt_topic_faculty, message)
+            logger.info(f"Published plain text message to {alt_topic_faculty}")
+
+            return success or success_alt
         except Exception as e:
             logger.error(f"Error publishing consultation: {str(e)}")
             return False
@@ -267,3 +281,59 @@ class ConsultationController:
         except Exception as e:
             logger.error(f"Error getting consultation by ID: {str(e)}")
             return None
+
+    def test_faculty_desk_connection(self, faculty_id):
+        """
+        Test the connection to a faculty desk unit by sending a test message.
+
+        Args:
+            faculty_id (int): Faculty ID to test
+
+        Returns:
+            bool: True if the test message was sent successfully, False otherwise
+        """
+        try:
+            # Get faculty information
+            db = get_db()
+            from ..models import Faculty
+            faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
+
+            if not faculty:
+                logger.error(f"Faculty not found: {faculty_id}")
+                return False
+
+            # Create a test message
+            message = f"Test message from ConsultEase central system.\nTimestamp: {datetime.datetime.now().isoformat()}"
+
+            # Publish to faculty-specific topic
+            topic = f"consultease/faculty/{faculty_id}/requests"
+            payload = {
+                'id': 0,
+                'student_id': 0,
+                'student_name': "System Test",
+                'student_department': "System",
+                'faculty_id': faculty_id,
+                'faculty_name': faculty.name,
+                'request_message': message,
+                'course_code': "TEST",
+                'status': "test",
+                'requested_at': datetime.datetime.now().isoformat(),
+                'message': message
+            }
+
+            # Publish to JSON topic
+            success_json = self.mqtt_service.publish(topic, payload)
+
+            # Publish to plain text topic
+            success_text = self.mqtt_service.publish_raw("professor/messages", message)
+
+            # Publish to faculty-specific plain text topic
+            success_faculty = self.mqtt_service.publish_raw(f"consultease/faculty/{faculty_id}/messages", message)
+
+            logger.info(f"Test message sent to faculty desk unit {faculty_id} ({faculty.name})")
+            logger.info(f"JSON topic success: {success_json}, Text topic success: {success_text}, Faculty topic success: {success_faculty}")
+
+            return success_json or success_text or success_faculty
+        except Exception as e:
+            logger.error(f"Error testing faculty desk connection: {str(e)}")
+            return False
