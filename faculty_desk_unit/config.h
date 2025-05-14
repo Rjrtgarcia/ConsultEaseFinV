@@ -19,7 +19,7 @@
 #define MQTT_PASSWORD ""  // Leave empty if not using authentication
 
 // Faculty Configuration
-#define FACULTY_ID 1  // This should match the faculty ID in the database
+#define FACULTY_ID 3  // This should match the faculty ID in the database
 #define FACULTY_NAME "Jeysibn"  // This should match the faculty name in the database
 #define FACULTY_DEPARTMENT "Computer Science"  // This should match the faculty department in the database
 

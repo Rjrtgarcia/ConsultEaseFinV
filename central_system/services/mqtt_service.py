@@ -516,33 +516,41 @@ class MQTTService:
             request_message = data.get('request_message', '')
             course_code = data.get('course_code', '')
 
-            # Check if message is already formatted
+            # IMPORTANT: Always use the message field if it exists
+            # This ensures consistency with the test message format
             if 'message' in data and isinstance(data['message'], str):
                 # Use the pre-formatted message
                 message = data['message']
-                logger.debug(f"Using pre-formatted message: {message}")
+                logger.info(f"Using pre-formatted message: {message}")
             else:
                 # Format the message for the faculty desk unit display
                 message = f"Student: {student_name}\n"
                 if course_code:
                     message += f"Course: {course_code}\n"
                 message += f"Request: {request_message}"
-                logger.debug(f"Created formatted message: {message}")
+                logger.info(f"Created formatted message: {message}")
 
             # Create a simplified payload for the faculty desk unit
             # The faculty desk unit expects a 'message' field that it can display directly
+            # IMPORTANT: Keep this format EXACTLY the same as the test message format
             formatted_data = {
-                'message': message,
+                'message': message,  # This is the most important field for the faculty desk unit
                 'student_name': student_name,
                 'course_code': course_code,
                 'consultation_id': data.get('id'),
                 'timestamp': data.get('requested_at')
             }
 
-            logger.debug(f"Formatted data for faculty desk unit: {formatted_data}")
+            # Log the formatted data for debugging
+            logger.info(f"Formatted data for faculty desk unit: {formatted_data}")
+
+            # Return the formatted data
             return formatted_data
         except Exception as e:
             logger.error(f"Error formatting message for faculty desk unit: {str(e)}")
+            # If there's an error, still try to include the message field
+            if not 'message' in data and 'request_message' in data:
+                data['message'] = f"Student: {data.get('student_name', 'Unknown')}\nRequest: {data.get('request_message', '')}"
             # Return the original data if there's an error
             return data
 
@@ -652,3 +660,63 @@ def get_mqtt_service():
     if mqtt_service is None:
         mqtt_service = MQTTService()
     return mqtt_service
+
+def test_mqtt_connection(faculty_id=3, message="Test message from MQTT service"):
+    """
+    Test the MQTT connection by sending a message to the faculty desk unit.
+
+    Args:
+        faculty_id (int): Faculty ID to send the message to
+        message (str): Message to send
+
+    Returns:
+        bool: True if the message was sent successfully, False otherwise
+    """
+    try:
+        # Get the MQTT service
+        mqtt_service = get_mqtt_service()
+
+        # Ensure the MQTT service is connected
+        if not mqtt_service.is_connected:
+            logger.warning("MQTT service is not connected. Attempting to connect...")
+            mqtt_service.connect()
+            # Wait briefly for connection
+            import time
+            time.sleep(1)
+
+            if not mqtt_service.is_connected:
+                logger.error("Failed to connect to MQTT service.")
+                return False
+
+        # Send a test message to the faculty desk unit
+        logger.info(f"Sending test message to faculty ID {faculty_id}: {message}")
+
+        # Send to the plain text topic
+        success_text = mqtt_service.publish_raw("professor/messages", message)
+
+        # Send to the faculty-specific topic
+        topic = f"consultease/faculty/{faculty_id}/requests"
+        payload = {
+            'id': 0,
+            'student_id': 0,
+            'student_name': "System Test",
+            'student_department': "System",
+            'faculty_id': faculty_id,
+            'request_message': message,
+            'course_code': "TEST",
+            'status': "test",
+            'requested_at': time.time(),
+            'message': message
+        }
+        success_json = mqtt_service.publish(topic, payload)
+
+        # Send to the faculty-specific plain text topic
+        success_faculty = mqtt_service.publish_raw(f"consultease/faculty/{faculty_id}/messages", message)
+
+        # Log the results
+        logger.info(f"Test message results: JSON: {success_json}, Text: {success_text}, Faculty: {success_faculty}")
+
+        return success_json or success_text or success_faculty
+    except Exception as e:
+        logger.error(f"Error testing MQTT connection: {str(e)}")
+        return False

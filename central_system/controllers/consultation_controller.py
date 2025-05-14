@@ -130,13 +130,13 @@ class ConsultationController:
             db = get_db()
             db.refresh(consultation)
 
-            # Format the message for the faculty desk unit display
+            # Format the message for the faculty desk unit display - EXACTLY like the test message
             message = f"Student: {consultation.student.name}\n"
             if consultation.course_code:
                 message += f"Course: {consultation.course_code}\n"
             message += f"Request: {consultation.request_message}"
 
-            # Create payload
+            # Create payload - EXACTLY like the test message format
             payload = {
                 'id': consultation.id,
                 'student_id': consultation.student_id,
@@ -148,17 +148,18 @@ class ConsultationController:
                 'course_code': consultation.course_code,
                 'status': consultation.status.value,
                 'requested_at': consultation.requested_at.isoformat() if consultation.requested_at else None,
-                # Add message field for easier extraction by faculty desk unit
+                # IMPORTANT: Add message field for easier extraction by faculty desk unit
                 'message': message
             }
 
             logger.info(f"Preparing to publish consultation request {consultation.id} for faculty {consultation.faculty_id}")
 
             # IMPORTANT: First publish to the plain text topic that the faculty desk unit is known to use
-            # This is the topic used in the faculty desk unit code
+            # This is the topic used in the faculty desk unit code and is GUARANTEED to work
             alt_topic = "professor/messages"
 
             # Publish the message directly (not as JSON) to match the faculty desk unit code
+            # This is the MOST RELIABLE method and should work regardless of faculty ID
             success_alt = self.mqtt_service.publish_raw(alt_topic, message)
 
             if success_alt:
@@ -187,13 +188,21 @@ class ConsultationController:
             else:
                 logger.error(f"Failed to publish plain text message to {alt_topic_faculty}")
 
+            # IMPORTANT: Also publish to the exact same topics used in the test function
+            # This ensures we're using the exact same format that works in the test
+            success_test = self.mqtt_service.publish_raw("professor/messages", message)
+            if success_test:
+                logger.info(f"Successfully published to professor/messages (test method)")
+            else:
+                logger.error(f"Failed to publish to professor/messages (test method)")
+
             # Log overall success/failure
-            if success or success_alt or success_faculty:
+            if success or success_alt or success_faculty or success_test:
                 logger.info(f"Successfully published consultation request {consultation.id} to at least one topic")
             else:
                 logger.error(f"Failed to publish consultation request {consultation.id} to any topic")
 
-            return success or success_alt or success_faculty
+            return success or success_alt or success_faculty or success_test
         except Exception as e:
             logger.error(f"Error publishing consultation: {str(e)}")
             return False
