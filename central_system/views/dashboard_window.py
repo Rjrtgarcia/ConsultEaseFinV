@@ -1,9 +1,8 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QPushButton, QGridLayout, QScrollArea, QFrame,
                                QLineEdit, QTextEdit, QComboBox, QMessageBox,
-                               QSplitter, QApplication, QGraphicsDropShadowEffect,
-                               QSpacerItem, QSizePolicy)
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSize, QPropertyAnimation, QEasingCurve
+                               QSplitter, QApplication)
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSize
 from PyQt5.QtGui import QIcon, QColor, QPixmap
 
 import os
@@ -35,31 +34,16 @@ class FacultyCard(QFrame):
         # Set styling based on faculty status
         self.update_style()
 
-        # Add shadow effect for depth
-        shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(15)
-        shadow.setColor(QColor(0, 0, 0, 50))
-        shadow.setOffset(2, 2)
-        self.setGraphicsEffect(shadow)
-
         # Main layout
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(15, 15, 15, 15)
-        main_layout.setSpacing(10)
 
         # Faculty info layout (image + text)
         info_layout = QHBoxLayout()
-        info_layout.setSpacing(15)
 
-        # Faculty image with improved styling
+        # Faculty image
         image_label = QLabel()
         image_label.setFixedSize(80, 80)
-        image_label.setStyleSheet("""
-            border: 2px solid #ddd;
-            border-radius: 40px;
-            background-color: white;
-            padding: 2px;
-        """)
+        image_label.setStyleSheet("border: 1px solid #ddd; border-radius: 40px; background-color: white;")
         image_label.setScaledContents(True)
 
         # Try to load faculty image
@@ -82,68 +66,40 @@ class FacultyCard(QFrame):
 
         # Faculty text info
         text_layout = QVBoxLayout()
-        text_layout.setSpacing(5)
 
-        # Faculty name with improved styling
+        # Faculty name
         name_label = QLabel(self.faculty.name)
-        name_label.setStyleSheet("font-size: 18pt; font-weight: bold; color: #2c3e50;")
+        name_label.setStyleSheet("font-size: 18pt; font-weight: bold;")
         text_layout.addWidget(name_label)
 
-        # Department with improved styling
+        # Department
         dept_label = QLabel(self.faculty.department)
-        dept_label.setStyleSheet("font-size: 12pt; color: #7f8c8d;")
+        dept_label.setStyleSheet("font-size: 12pt; color: #666;")
         text_layout.addWidget(dept_label)
 
         info_layout.addLayout(text_layout)
         main_layout.addLayout(info_layout)
 
-        # Add a separator line
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        separator.setStyleSheet("background-color: #ddd; max-height: 1px;")
-        main_layout.addWidget(separator)
-
-        # Status indicator with improved styling
+        # Status indicator
         status_layout = QHBoxLayout()
         status_icon = QLabel("●")
         if self.faculty.status:
-            status_icon.setStyleSheet("font-size: 16pt; color: #2ecc71;")
+            status_icon.setStyleSheet("font-size: 16pt; color: #4caf50;")
             status_text = QLabel("Available")
-            status_text.setStyleSheet("font-size: 14pt; color: #2ecc71; font-weight: bold;")
+            status_text.setStyleSheet("font-size: 14pt; color: #4caf50;")
         else:
-            status_icon.setStyleSheet("font-size: 16pt; color: #e74c3c;")
+            status_icon.setStyleSheet("font-size: 16pt; color: #f44336;")
             status_text = QLabel("Unavailable")
-            status_text.setStyleSheet("font-size: 14pt; color: #e74c3c; font-weight: bold;")
+            status_text.setStyleSheet("font-size: 14pt; color: #f44336;")
 
         status_layout.addWidget(status_icon)
         status_layout.addWidget(status_text)
         status_layout.addStretch()
         main_layout.addLayout(status_layout)
 
-        # Add spacer for better layout
-        main_layout.addSpacerItem(QSpacerItem(20, 10, QSizePolicy.Minimum, QSizePolicy.Expanding))
-
-        # Request consultation button with improved styling
+        # Request consultation button
         request_button = QPushButton("Request Consultation")
         request_button.setEnabled(self.faculty.status)
-        request_button.setMinimumHeight(40)
-        request_button.setStyleSheet("""
-            QPushButton {
-                background-color: #3498db;
-                color: white;
-                border-radius: 5px;
-                font-size: 13pt;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-            QPushButton:disabled {
-                background-color: #bdc3c7;
-                color: #7f8c8d;
-            }
-        """)
         request_button.clicked.connect(self.request_consultation)
         main_layout.addWidget(request_button)
 
@@ -155,7 +111,7 @@ class FacultyCard(QFrame):
             self.setStyleSheet('''
                 QFrame {
                     background-color: #e8f5e9;
-                    border: 2px solid #2ecc71;
+                    border: 2px solid #4caf50;
                     border-radius: 10px;
                 }
             ''')
@@ -163,53 +119,10 @@ class FacultyCard(QFrame):
             self.setStyleSheet('''
                 QFrame {
                     background-color: #ffebee;
-                    border: 2px solid #e74c3c;
+                    border: 2px solid #f44336;
                     border-radius: 10px;
                 }
             ''')
-
-    def enterEvent(self, event):
-        """
-        Handle mouse enter event with animation effect.
-        """
-        # Create scale animation for hover effect
-        self.setGraphicsEffect(None)  # Remove existing effect
-
-        # Create new shadow effect with stronger values
-        shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(20)
-        shadow.setColor(QColor(0, 0, 0, 80))
-        shadow.setOffset(3, 3)
-        self.setGraphicsEffect(shadow)
-
-        # Slightly elevate the card
-        self.setStyleSheet(self.styleSheet() + '''
-            QFrame {
-                margin-top: -2px;
-                margin-bottom: 2px;
-            }
-        ''')
-
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        """
-        Handle mouse leave event with animation effect.
-        """
-        # Reset shadow effect
-        self.setGraphicsEffect(None)
-
-        # Create standard shadow effect
-        shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(15)
-        shadow.setColor(QColor(0, 0, 0, 50))
-        shadow.setOffset(2, 2)
-        self.setGraphicsEffect(shadow)
-
-        # Reset elevation
-        self.update_style()
-
-        super().leaveEvent(event)
 
     def update_faculty(self, faculty):
         """
@@ -454,18 +367,17 @@ class DashboardWindow(BaseWindow):
         welcome_label.setStyleSheet("font-size: 24pt; font-weight: bold;")
         header_layout.addWidget(welcome_label)
 
-        # Logout button - more touch-friendly
+        # Logout button - smaller size
         logout_button = QPushButton("Logout")
-        logout_button.setMinimumWidth(120)
-        logout_button.setMinimumHeight(40)
+        logout_button.setFixedSize(80, 30)
         logout_button.setStyleSheet("""
             QPushButton {
                 background-color: #e74c3c;
                 color: white;
-                border-radius: 5px;
-                font-size: 14pt;
+                border-radius: 4px;
+                font-size: 10pt;
                 font-weight: bold;
-                padding: 5px 15px;
+                padding: 2px 8px;
             }
             QPushButton:hover {
                 background-color: #c0392b;

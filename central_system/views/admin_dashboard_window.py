@@ -56,9 +56,22 @@ class AdminDashboardWindow(BaseWindow):
         admin_label.setStyleSheet("font-size: 16pt; font-weight: bold;")
         header_layout.addWidget(admin_label)
 
-        # Logout button
+        # Logout button - smaller size
         logout_button = QPushButton("Logout")
-        logout_button.setFixedWidth(100)
+        logout_button.setFixedSize(80, 30)
+        logout_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                border-radius: 4px;
+                font-size: 10pt;
+                font-weight: bold;
+                padding: 2px 8px;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+        """)
         logout_button.clicked.connect(self.logout)
         header_layout.addWidget(logout_button)
 

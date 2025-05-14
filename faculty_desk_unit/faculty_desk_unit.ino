@@ -95,16 +95,12 @@ class MyServerCallbacks: public BLEServerCallbacks {
     };
 
     void onDisconnect(BLEServer* pServer) {
-      // We'll keep the device as connected even when a client disconnects
-      // This ensures the faculty is always shown as available
-      Serial.println("BLE client disconnected, but keeping status as connected");
+      deviceConnected = false;
+      mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
+      Serial.println("BLE client disconnected");
 
       // Restart advertising so new clients can connect
       BLEDevice::startAdvertising();
-
-      // We don't change deviceConnected status or publish disconnection
-      // deviceConnected = false;
-      // mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
     }
 };
 
@@ -606,14 +602,14 @@ void setup() {
   Serial.println("BLE Server ready!");
   displaySystemStatus("BLE Server ready");
 
-  // Simulate a connected BLE client at startup
-  deviceConnected = true;
-  oldDeviceConnected = true;
+  // Initialize connection status
+  deviceConnected = false;
+  oldDeviceConnected = false;
 
-  // Publish connected status to MQTT
-  mqttClient.publish(mqtt_topic_status, "keychain_connected");
-  Serial.println("BLE client simulated as connected at startup");
-  displaySystemStatus("Keychain connected!");
+  // Publish initial status to MQTT
+  mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
+  Serial.println("BLE server ready, waiting for keychain connection");
+  displaySystemStatus("Waiting for keychain...");
 
   // Update time display
   updateTimeDisplay();
@@ -653,23 +649,40 @@ void loop() {
   }
   mqttClient.loop();
 
-  // BLE connection management - simplified since we're keeping it always connected
-  // We only handle real connections, but don't change our simulated connected state
-  if (deviceConnected && !oldDeviceConnected) {
-    // A real client connected
-    displaySystemStatus("Keychain connected!");
+  // BLE connection management
+  // Handle connection and disconnection events
+  if (deviceConnected != oldDeviceConnected) {
+    if (deviceConnected) {
+      // A client connected
+      displaySystemStatus("Keychain connected!");
 
-    // Show a notification about keychain connection - seamless design
-    tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, 40, COLOR_MESSAGE_BG);
+      // Show a notification about keychain connection - seamless design
+      tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, 40, COLOR_MESSAGE_BG);
 
-    // Ensure gold accent is intact
-    drawGoldAccent();
+      // Ensure gold accent is intact
+      drawGoldAccent();
 
-    tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
-    tft.setTextSize(2);
-    tft.setTextColor(NU_GOLD);
-    tft.println("Keychain Connected");
-    delay(2000);
+      tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
+      tft.setTextSize(2);
+      tft.setTextColor(NU_GOLD);
+      tft.println("Keychain Connected");
+      delay(2000);
+    } else {
+      // A client disconnected
+      displaySystemStatus("Keychain disconnected!");
+
+      // Show a notification about keychain disconnection
+      tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, 40, COLOR_MESSAGE_BG);
+
+      // Ensure gold accent is intact
+      drawGoldAccent();
+
+      tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
+      tft.setTextSize(2);
+      tft.setTextColor(COLOR_STATUS_ERROR);
+      tft.println("Keychain Disconnected");
+      delay(2000);
+    }
 
     // If we have a last message, redisplay it, otherwise clear
     if (lastMessage.length() > 0) {
@@ -685,13 +698,18 @@ void loop() {
   // Get current time for all time-based operations
   unsigned long currentMillis = millis();
 
-  // Periodically ensure we're still reporting as connected
+  // Periodically refresh the current connection status
   static unsigned long lastStatusUpdateTime = 0;
   if (currentMillis - lastStatusUpdateTime > 300000) { // Every 5 minutes
     lastStatusUpdateTime = currentMillis;
-    // Re-publish connected status to ensure faculty shows as available
-    mqttClient.publish(mqtt_topic_status, "keychain_connected");
-    Serial.println("Periodic BLE connected status update sent");
+    // Re-publish current connection status
+    if (deviceConnected) {
+      mqttClient.publish(mqtt_topic_status, "keychain_connected");
+      Serial.println("Periodic BLE connected status update sent");
+    } else {
+      mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
+      Serial.println("Periodic BLE disconnected status update sent");
+    }
   }
 
   // Update time display every minute
