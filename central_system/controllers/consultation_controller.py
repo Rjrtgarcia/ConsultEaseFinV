@@ -102,7 +102,26 @@ class ConsultationController:
 
             logger.info(f"Created consultation request: {consultation.id} (Student: {student_id}, Faculty: {faculty_id})")
 
-            # Publish to MQTT
+            # Get student and faculty information for direct MQTT publishing
+            from ..models import Student, Faculty
+            student = db.query(Student).filter(Student.id == student_id).first()
+            faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
+
+            # Create a simple message that will definitely work
+            simple_message = f"Student: {student.name if student else 'Unknown'}\n"
+            if course_code:
+                simple_message += f"Course: {course_code}\n"
+            simple_message += f"Request: {request_message}"
+
+            # Publish directly to the professor/messages topic which is guaranteed to work
+            success_direct = self.mqtt_service.publish_raw("professor/messages", simple_message)
+
+            if success_direct:
+                logger.info(f"Successfully published direct message to professor/messages")
+            else:
+                logger.error(f"Failed to publish direct message to professor/messages")
+
+            # Also try the regular publishing method
             publish_success = self._publish_consultation(consultation)
 
             if publish_success:
@@ -126,12 +145,31 @@ class ConsultationController:
             consultation (Consultation): Consultation object to publish
         """
         try:
-            # Get full consultation data with related objects
-            db = get_db()
-            db.refresh(consultation)
+            # Get a new database session and fetch the consultation with all related objects
+            db = get_db(force_new=True)
+
+            # Instead of refreshing, query for the consultation by ID to ensure it's attached to this session
+            consultation_id = consultation.id
+            consultation = db.query(Consultation).filter(Consultation.id == consultation_id).first()
+
+            if not consultation:
+                logger.error(f"Consultation with ID {consultation_id} not found in database")
+                return False
+
+            # Explicitly load the related objects to avoid lazy loading issues
+            student = consultation.student
+            faculty = consultation.faculty
+
+            if not student:
+                logger.error(f"Student not found for consultation {consultation_id}")
+                return False
+
+            if not faculty:
+                logger.error(f"Faculty not found for consultation {consultation_id}")
+                return False
 
             # Format the message for the faculty desk unit display - EXACTLY like the test message
-            message = f"Student: {consultation.student.name}\n"
+            message = f"Student: {student.name}\n"
             if consultation.course_code:
                 message += f"Course: {consultation.course_code}\n"
             message += f"Request: {consultation.request_message}"
@@ -139,11 +177,11 @@ class ConsultationController:
             # Create payload - EXACTLY like the test message format
             payload = {
                 'id': consultation.id,
-                'student_id': consultation.student_id,
-                'student_name': consultation.student.name,
-                'student_department': consultation.student.department,
-                'faculty_id': consultation.faculty_id,
-                'faculty_name': consultation.faculty.name,
+                'student_id': student.id,
+                'student_name': student.name,
+                'student_department': student.department,
+                'faculty_id': faculty.id,
+                'faculty_name': faculty.name,
                 'request_message': consultation.request_message,
                 'course_code': consultation.course_code,
                 'status': consultation.status.value,
@@ -152,7 +190,7 @@ class ConsultationController:
                 'message': message
             }
 
-            logger.info(f"Preparing to publish consultation request {consultation.id} for faculty {consultation.faculty_id}")
+            logger.info(f"Preparing to publish consultation request {consultation.id} for faculty {faculty.id}")
 
             # IMPORTANT: First publish to the plain text topic that the faculty desk unit is known to use
             # This is the topic used in the faculty desk unit code and is GUARANTEED to work
@@ -168,7 +206,7 @@ class ConsultationController:
                 logger.error(f"Failed to publish consultation request to faculty desk unit topic {alt_topic}")
 
             # Now publish to faculty-specific topic
-            topic = f"consultease/faculty/{consultation.faculty_id}/requests"
+            topic = f"consultease/faculty/{faculty.id}/requests"
 
             # The MQTT service will format the message for the faculty desk unit
             success = self.mqtt_service.publish(topic, payload)
@@ -180,7 +218,7 @@ class ConsultationController:
 
             # Try publishing to the faculty-specific topic in plain text format as well
             # This provides maximum compatibility
-            alt_topic_faculty = f"consultease/faculty/{consultation.faculty_id}/messages"
+            alt_topic_faculty = f"consultease/faculty/{faculty.id}/messages"
             success_faculty = self.mqtt_service.publish_raw(alt_topic_faculty, message)
 
             if success_faculty:
@@ -201,6 +239,9 @@ class ConsultationController:
                 logger.info(f"Successfully published consultation request {consultation.id} to at least one topic")
             else:
                 logger.error(f"Failed to publish consultation request {consultation.id} to any topic")
+
+            # Close the database session
+            db.close()
 
             return success or success_alt or success_faculty or success_test
         except Exception as e:
