@@ -516,13 +516,21 @@ class MQTTService:
             request_message = data.get('request_message', '')
             course_code = data.get('course_code', '')
 
-            # Format the message for the faculty desk unit display
-            message = f"Student: {student_name}\n"
-            if course_code:
-                message += f"Course: {course_code}\n"
-            message += f"Request: {request_message}"
+            # Check if message is already formatted
+            if 'message' in data and isinstance(data['message'], str):
+                # Use the pre-formatted message
+                message = data['message']
+                logger.debug(f"Using pre-formatted message: {message}")
+            else:
+                # Format the message for the faculty desk unit display
+                message = f"Student: {student_name}\n"
+                if course_code:
+                    message += f"Course: {course_code}\n"
+                message += f"Request: {request_message}"
+                logger.debug(f"Created formatted message: {message}")
 
             # Create a simplified payload for the faculty desk unit
+            # The faculty desk unit expects a 'message' field that it can display directly
             formatted_data = {
                 'message': message,
                 'student_name': student_name,
@@ -531,6 +539,7 @@ class MQTTService:
                 'timestamp': data.get('requested_at')
             }
 
+            logger.debug(f"Formatted data for faculty desk unit: {formatted_data}")
             return formatted_data
         except Exception as e:
             logger.error(f"Error formatting message for faculty desk unit: {str(e)}")

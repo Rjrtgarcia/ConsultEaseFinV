@@ -13,7 +13,7 @@
 #define WIFI_PASSWORD "Admin123"
 
 // MQTT Configuration
-#define MQTT_SERVER "192.168.1.100"  // Replace with your actual Raspberry Pi IP address
+#define MQTT_SERVER "172.20.10.8"  // Updated to match central system's MQTT broker IP
 #define MQTT_PORT 1883
 #define MQTT_USERNAME ""  // Leave empty if not using authentication
 #define MQTT_PASSWORD ""  // Leave empty if not using authentication

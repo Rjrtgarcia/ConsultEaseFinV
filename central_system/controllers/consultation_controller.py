@@ -72,6 +72,19 @@ class ConsultationController:
             Consultation: New consultation object or None if error
         """
         try:
+            logger.info(f"Creating new consultation request (Student: {student_id}, Faculty: {faculty_id})")
+
+            # Check if MQTT service is connected
+            if not self.mqtt_service.is_connected:
+                logger.warning("MQTT service is not connected. Attempting to connect...")
+                self.mqtt_service.connect()
+                # Wait briefly for connection
+                import time
+                time.sleep(1)
+
+                if not self.mqtt_service.is_connected:
+                    logger.error("Failed to connect to MQTT service. Consultation will be created but may not be delivered to faculty desk unit.")
+
             db = get_db()
 
             # Create new consultation
@@ -90,7 +103,12 @@ class ConsultationController:
             logger.info(f"Created consultation request: {consultation.id} (Student: {student_id}, Faculty: {faculty_id})")
 
             # Publish to MQTT
-            self._publish_consultation(consultation)
+            publish_success = self._publish_consultation(consultation)
+
+            if publish_success:
+                logger.info(f"Successfully published consultation request {consultation.id} to faculty desk unit")
+            else:
+                logger.error(f"Failed to publish consultation request {consultation.id} to faculty desk unit")
 
             # Notify callbacks
             self._notify_callbacks(consultation)
@@ -112,6 +130,12 @@ class ConsultationController:
             db = get_db()
             db.refresh(consultation)
 
+            # Format the message for the faculty desk unit display
+            message = f"Student: {consultation.student.name}\n"
+            if consultation.course_code:
+                message += f"Course: {consultation.course_code}\n"
+            message += f"Request: {consultation.request_message}"
+
             # Create payload
             payload = {
                 'id': consultation.id,
@@ -125,47 +149,51 @@ class ConsultationController:
                 'status': consultation.status.value,
                 'requested_at': consultation.requested_at.isoformat() if consultation.requested_at else None,
                 # Add message field for easier extraction by faculty desk unit
-                'message': f"Student: {consultation.student.name}\n" +
-                          (f"Course: {consultation.course_code}\n" if consultation.course_code else "") +
-                          f"Request: {consultation.request_message}"
+                'message': message
             }
 
-            # Publish to faculty-specific topic
+            logger.info(f"Preparing to publish consultation request {consultation.id} for faculty {consultation.faculty_id}")
+
+            # IMPORTANT: First publish to the plain text topic that the faculty desk unit is known to use
+            # This is the topic used in the faculty desk unit code
+            alt_topic = "professor/messages"
+
+            # Publish the message directly (not as JSON) to match the faculty desk unit code
+            success_alt = self.mqtt_service.publish_raw(alt_topic, message)
+
+            if success_alt:
+                logger.info(f"Successfully published consultation request to faculty desk unit topic {alt_topic}")
+            else:
+                logger.error(f"Failed to publish consultation request to faculty desk unit topic {alt_topic}")
+
+            # Now publish to faculty-specific topic
             topic = f"consultease/faculty/{consultation.faculty_id}/requests"
 
             # The MQTT service will format the message for the faculty desk unit
             success = self.mqtt_service.publish(topic, payload)
 
             if success:
-                logger.info(f"Published consultation request to {topic}")
+                logger.info(f"Successfully published consultation request to {topic}")
             else:
                 logger.error(f"Failed to publish consultation request to {topic}")
-
-            # Also publish to the professor/messages topic for the faculty desk unit
-            # This is the topic used in the faculty desk unit code
-            alt_topic = "professor/messages"
-
-            # Format the message for the faculty desk unit display
-            message = f"Student: {consultation.student.name}\n"
-            if consultation.course_code:
-                message += f"Course: {consultation.course_code}\n"
-            message += f"Request: {consultation.request_message}"
-
-            # Publish the message directly (not as JSON) to match the faculty desk unit code
-            success_alt = self.mqtt_service.publish_raw(alt_topic, message)
-
-            if success_alt:
-                logger.info(f"Published consultation request to faculty desk unit topic {alt_topic}")
-            else:
-                logger.error(f"Failed to publish consultation request to faculty desk unit topic {alt_topic}")
 
             # Try publishing to the faculty-specific topic in plain text format as well
             # This provides maximum compatibility
             alt_topic_faculty = f"consultease/faculty/{consultation.faculty_id}/messages"
-            self.mqtt_service.publish_raw(alt_topic_faculty, message)
-            logger.info(f"Published plain text message to {alt_topic_faculty}")
+            success_faculty = self.mqtt_service.publish_raw(alt_topic_faculty, message)
 
-            return success or success_alt
+            if success_faculty:
+                logger.info(f"Successfully published plain text message to {alt_topic_faculty}")
+            else:
+                logger.error(f"Failed to publish plain text message to {alt_topic_faculty}")
+
+            # Log overall success/failure
+            if success or success_alt or success_faculty:
+                logger.info(f"Successfully published consultation request {consultation.id} to at least one topic")
+            else:
+                logger.error(f"Failed to publish consultation request {consultation.id} to any topic")
+
+            return success or success_alt or success_faculty
         except Exception as e:
             logger.error(f"Error publishing consultation: {str(e)}")
             return False
