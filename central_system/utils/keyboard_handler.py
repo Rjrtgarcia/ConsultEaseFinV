@@ -80,11 +80,16 @@ class KeyboardHandler(QObject):
         if sys.platform.startswith('linux'):
             os.environ["GDK_BACKEND"] = "wayland,x11"
             os.environ["QT_QPA_PLATFORM"] = "wayland;xcb"
-            # Set environment variables for onboard
+
+            # Set environment variables for squeekboard (primary)
+            os.environ["SQUEEKBOARD_FORCE"] = "1"
+            os.environ["MOZ_ENABLE_WAYLAND"] = "1"
+            os.environ["QT_IM_MODULE"] = "wayland"
+            os.environ["CLUTTER_IM_MODULE"] = "wayland"
+
+            # Set environment variables for onboard (fallback)
             os.environ["ONBOARD_ENABLE_TOUCH"] = "1"
             os.environ["ONBOARD_XEMBED"] = "1"
-            # Keep squeekboard environment variable for backward compatibility
-            os.environ["SQUEEKBOARD_FORCE"] = "1"
 
             # Check if we're running as root and warn if so
             if os.geteuid() == 0:
@@ -95,7 +100,84 @@ class KeyboardHandler(QObject):
         if not sys.platform.startswith('linux'):
             return
 
-        if self.keyboard_type == 'onboard':
+        # Handle squeekboard (preferred)
+        if self.keyboard_type == 'squeekboard':
+            try:
+                # First check if squeekboard is already running as a process
+                check_cmd = "pgrep -f squeekboard"
+                result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+
+                if result.returncode == 0:
+                    logger.info("Squeekboard is already running as a process")
+                    return
+
+                # Check if squeekboard service is running
+                check_cmd = "systemctl --user is-active squeekboard.service"
+                result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+
+                if "inactive" in result.stdout or "failed" in result.stdout:
+                    logger.info("Squeekboard service not running, attempting to start it...")
+                    start_cmd = "systemctl --user start squeekboard.service"
+                    subprocess.run(start_cmd, shell=True)
+
+                    # Check if it's now running
+                    result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+                    if "active" in result.stdout:
+                        logger.info("Squeekboard service started successfully")
+                    else:
+                        logger.warning("Failed to start squeekboard service, trying direct launch")
+                        # Try starting squeekboard directly
+                        subprocess.Popen(['squeekboard'],
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL,
+                                       env=dict(os.environ, SQUEEKBOARD_FORCE="1"),
+                                       start_new_session=True)
+                        logger.info("Started squeekboard directly")
+                else:
+                    logger.info("Squeekboard service is already running")
+
+                # Create autostart entry for squeekboard if it doesn't exist
+                try:
+                    autostart_path = os.path.expanduser("~/.config/autostart/squeekboard-autostart.desktop")
+                    if not os.path.exists(autostart_path):
+                        # Create autostart entry
+                        os.makedirs(os.path.dirname(autostart_path), exist_ok=True)
+                        with open(autostart_path, 'w') as f:
+                            f.write("""[Desktop Entry]
+Type=Application
+Name=Squeekboard
+Exec=squeekboard
+Comment=On-screen keyboard for Wayland
+X-GNOME-Autostart-enabled=true
+""")
+                        logger.info("Created squeekboard autostart configuration")
+
+                        # Disable onboard autostart if it exists
+                        onboard_autostart = os.path.expanduser("~/.config/autostart/onboard-autostart.desktop")
+                        if os.path.exists(onboard_autostart):
+                            try:
+                                os.rename(onboard_autostart, onboard_autostart + ".disabled")
+                                logger.info("Disabled onboard autostart")
+                            except Exception as e:
+                                logger.debug(f"Error disabling onboard autostart: {e}")
+                except Exception as e:
+                    logger.debug(f"Error setting up squeekboard autostart: {e}")
+            except Exception as e:
+                logger.error(f"Error ensuring squeekboard service: {e}")
+
+                # Try direct launch as last resort
+                try:
+                    subprocess.Popen(['squeekboard'],
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL,
+                                   env=dict(os.environ, SQUEEKBOARD_FORCE="1"),
+                                   start_new_session=True)
+                    logger.info("Started squeekboard directly as last resort")
+                except Exception as e2:
+                    logger.error(f"Failed to start squeekboard: {e2}")
+
+        # Handle onboard (fallback)
+        elif self.keyboard_type == 'onboard':
             try:
                 # Check if onboard is already running
                 check_cmd = "pgrep -f onboard"
@@ -155,29 +237,6 @@ touch-feedback-size=small
                     logger.info("Onboard is already running")
             except Exception as e:
                 logger.error(f"Error checking/starting onboard: {e}")
-
-        elif self.keyboard_type == 'squeekboard':
-            try:
-                # Check if squeekboard service is running
-                check_cmd = "systemctl --user is-active squeekboard.service"
-                result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
-
-                if "inactive" in result.stdout or "failed" in result.stdout:
-                    logger.info("Squeekboard service not running, attempting to start it...")
-                    start_cmd = "systemctl --user start squeekboard.service"
-                    subprocess.run(start_cmd, shell=True)
-
-                    # Check if it's now running
-                    result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
-                    if "active" in result.stdout:
-                        logger.info("Squeekboard service started successfully")
-                    else:
-                        logger.warning("Failed to start squeekboard service, keyboard may not appear")
-                else:
-                    logger.info("Squeekboard service is already running")
-
-            except Exception as e:
-                logger.error(f"Error checking/starting squeekboard service: {e}")
 
     def _check_keyboard_availability(self):
         """Check if the detected keyboard can actually be launched"""

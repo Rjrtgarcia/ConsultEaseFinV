@@ -57,18 +57,18 @@ class KeyboardIntegration(QObject):
         if not sys.platform.startswith('linux'):
             return None
 
-        # Check for onboard first (preferred)
+        # Check for squeekboard first (preferred)
         try:
-            result = subprocess.run(['which', 'onboard'],
+            result = subprocess.run(['which', 'squeekboard'],
                                   stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE)
             if result.returncode == 0:
-                return 'onboard'
+                return 'squeekboard'
         except Exception:
             pass
 
-        # Check for other keyboards
-        keyboards = ['squeekboard', 'matchbox-keyboard']
+        # Check for other keyboards as fallback
+        keyboards = ['onboard', 'matchbox-keyboard']
         for keyboard in keyboards:
             try:
                 result = subprocess.run(['which', keyboard],
@@ -99,22 +99,94 @@ class KeyboardIntegration(QObject):
         if sys.platform.startswith('linux'):
             os.environ["GDK_BACKEND"] = "wayland,x11"
             os.environ["QT_QPA_PLATFORM"] = "wayland;xcb"
-            # Onboard environment variables
-            os.environ["ONBOARD_ENABLE_TOUCH"] = "1"
-            os.environ["ONBOARD_XEMBED"] = "1"
-            # Keep squeekboard variables for compatibility
+
+            # Squeekboard environment variables (primary)
             os.environ["SQUEEKBOARD_FORCE"] = "1"
             os.environ["MOZ_ENABLE_WAYLAND"] = "1"
             os.environ["QT_IM_MODULE"] = "wayland"
             os.environ["CLUTTER_IM_MODULE"] = "wayland"
+
+            # Disable onboard if squeekboard is the selected keyboard
+            if self.keyboard_type == 'squeekboard':
+                os.environ["ONBOARD_DISABLE"] = "1"
+            # Keep onboard variables for compatibility if it's the selected keyboard
+            elif self.keyboard_type == 'onboard':
+                os.environ["ONBOARD_ENABLE_TOUCH"] = "1"
+                os.environ["ONBOARD_XEMBED"] = "1"
 
     def _ensure_keyboard_service(self):
         """Ensure the keyboard service is running."""
         if not sys.platform.startswith('linux'):
             return
 
-        # Handle onboard
-        if self.keyboard_type == 'onboard':
+        # Handle squeekboard (preferred)
+        if self.keyboard_type == 'squeekboard':
+            try:
+                # First check if squeekboard is already running as a process
+                if self._is_squeekboard_running():
+                    logger.info("Squeekboard is already running as a process")
+                    return
+
+                # Check if squeekboard service is running
+                check_cmd = "systemctl --user is-active squeekboard.service"
+                result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+
+                if "inactive" in result.stdout or "failed" in result.stdout:
+                    logger.info("Squeekboard service not running, attempting to start it...")
+
+                    # Try to start the service
+                    start_cmd = "systemctl --user start squeekboard.service"
+                    subprocess.run(start_cmd, shell=True)
+
+                    # Check if it's now running
+                    result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+                    if "active" in result.stdout:
+                        logger.info("Squeekboard service started successfully")
+                    else:
+                        logger.warning("Failed to start squeekboard service, trying direct launch")
+                        # Try starting squeekboard directly
+                        subprocess.Popen(['squeekboard'],
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL,
+                                       env=dict(os.environ, SQUEEKBOARD_FORCE="1"),
+                                       start_new_session=True)
+                        logger.info("Started squeekboard directly")
+                else:
+                    logger.info("Squeekboard service is already running")
+
+                # Create autostart entry for squeekboard if it doesn't exist
+                try:
+                    autostart_path = os.path.expanduser("~/.config/autostart/squeekboard-autostart.desktop")
+                    if not os.path.exists(autostart_path):
+                        # Create autostart entry
+                        os.makedirs(os.path.dirname(autostart_path), exist_ok=True)
+                        with open(autostart_path, 'w') as f:
+                            f.write("""[Desktop Entry]
+Type=Application
+Name=Squeekboard
+Exec=squeekboard
+Comment=On-screen keyboard for Wayland
+X-GNOME-Autostart-enabled=true
+""")
+                        logger.info("Created squeekboard autostart configuration")
+                except Exception as e:
+                    logger.debug(f"Error setting up squeekboard autostart: {e}")
+            except Exception as e:
+                logger.error(f"Error ensuring squeekboard service: {e}")
+
+                # Try direct launch as last resort
+                try:
+                    subprocess.Popen(['squeekboard'],
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL,
+                                   env=dict(os.environ, SQUEEKBOARD_FORCE="1"),
+                                   start_new_session=True)
+                    logger.info("Started squeekboard directly as last resort")
+                except Exception as e2:
+                    logger.error(f"Failed to start squeekboard: {e2}")
+
+        # Handle onboard (fallback)
+        elif self.keyboard_type == 'onboard':
             try:
                 # Check if onboard is already running
                 check_cmd = "pgrep -f onboard"
@@ -151,36 +223,6 @@ Comment=Flexible on-screen keyboard
             except Exception as e:
                 logger.error(f"Error ensuring onboard service: {e}")
 
-        # Handle squeekboard
-        elif self.keyboard_type == 'squeekboard':
-            try:
-                # Check if squeekboard service is running
-                check_cmd = "systemctl --user is-active squeekboard.service"
-                result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
-
-                if "inactive" in result.stdout or "failed" in result.stdout:
-                    logger.info("Squeekboard service not running, attempting to start it...")
-
-                    # Try to start the service
-                    start_cmd = "systemctl --user start squeekboard.service"
-                    subprocess.run(start_cmd, shell=True)
-
-                    # Check if it's now running
-                    result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
-                    if "active" in result.stdout:
-                        logger.info("Squeekboard service started successfully")
-                    else:
-                        logger.warning("Failed to start squeekboard service, trying direct launch")
-                        # Try starting squeekboard directly
-                        subprocess.Popen(['squeekboard'],
-                                       stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.DEVNULL,
-                                       start_new_session=True)
-                else:
-                    logger.info("Squeekboard service is already running")
-            except Exception as e:
-                logger.error(f"Error ensuring squeekboard service: {e}")
-
     def _start_monitor_thread(self):
         """Start a thread to monitor keyboard visibility."""
         def monitor_thread():
@@ -205,20 +247,21 @@ Comment=Flexible on-screen keyboard
         monitor.start()
         logger.debug("Started keyboard monitor thread")
 
+    def _is_squeekboard_running(self):
+        """Check if squeekboard process is running."""
+        try:
+            # Check if squeekboard is running
+            check_cmd = "pgrep -f squeekboard"
+            result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+            return result.returncode == 0
+        except Exception as e:
+            logger.debug(f"Error checking if squeekboard is running: {e}")
+            return False
+
     def _is_keyboard_visible(self):
         """Check if the keyboard is currently visible."""
-        # For onboard, check if it's running
-        if self.keyboard_type == 'onboard':
-            try:
-                # Check if onboard is running
-                check_cmd = "pgrep -f onboard"
-                result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
-                return result.returncode == 0
-            except Exception:
-                return self.keyboard_visible
-
-        # For squeekboard, use DBus
-        elif self.dbus_available and self.keyboard_type == 'squeekboard':
+        # For squeekboard, use DBus (preferred)
+        if self.dbus_available and self.keyboard_type == 'squeekboard':
             try:
                 # Use dbus-send to query keyboard visibility
                 cmd = [
@@ -235,6 +278,16 @@ Comment=Flexible on-screen keyboard
                     return False
             except Exception:
                 pass
+
+        # For onboard, check if it's running
+        elif self.keyboard_type == 'onboard':
+            try:
+                # Check if onboard is running
+                check_cmd = "pgrep -f onboard"
+                result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+                return result.returncode == 0
+            except Exception:
+                return self.keyboard_visible
 
         # Default to internal state
         return self.keyboard_visible
@@ -254,8 +307,44 @@ Comment=Flexible on-screen keyboard
 
         logger.info("Showing keyboard")
 
-        # Method 1: Direct launch for onboard (preferred)
-        if self.keyboard_type == 'onboard':
+        # Method 1: DBus method for squeekboard (preferred)
+        if self.keyboard_type == 'squeekboard' and self.dbus_available:
+            try:
+                # First ensure squeekboard is running
+                if not self._is_squeekboard_running():
+                    logger.info("Squeekboard not running, starting it...")
+                    subprocess.Popen(['squeekboard'],
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL,
+                                   env=dict(os.environ, SQUEEKBOARD_FORCE="1"),
+                                   start_new_session=True)
+                    # Give it a moment to start
+                    time.sleep(0.5)
+
+                # Now show the keyboard via DBus
+                cmd = [
+                    "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
+                    "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
+                ]
+                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.keyboard_visible = True
+                self.keyboard_visibility_changed.emit(True)
+                logger.info("Showed squeekboard via DBus")
+            except Exception as e:
+                logger.debug(f"Error showing keyboard via DBus: {e}")
+                # Try direct launch as fallback
+                try:
+                    subprocess.Popen(['squeekboard'],
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL,
+                                   env=dict(os.environ, SQUEEKBOARD_FORCE="1"),
+                                   start_new_session=True)
+                    logger.info("Started squeekboard directly as fallback")
+                except Exception as e2:
+                    logger.debug(f"Error launching squeekboard directly: {e2}")
+
+        # Method 2: Direct launch for onboard (fallback)
+        elif self.keyboard_type == 'onboard':
             try:
                 # Check if onboard is already running
                 check_cmd = "pgrep -f onboard"
@@ -274,30 +363,6 @@ Comment=Flexible on-screen keyboard
                 self.keyboard_visibility_changed.emit(True)
             except Exception as e:
                 logger.debug(f"Error launching onboard: {e}")
-
-        # Method 2: DBus method for squeekboard
-        elif self.keyboard_type == 'squeekboard' and self.dbus_available:
-            try:
-                cmd = [
-                    "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
-                    "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
-                ]
-                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                self.keyboard_visible = True
-                self.keyboard_visibility_changed.emit(True)
-            except Exception as e:
-                logger.debug(f"Error showing keyboard via DBus: {e}")
-
-        # Method 3: Direct launch for squeekboard
-        elif self.keyboard_type == 'squeekboard':
-            try:
-                subprocess.Popen(['squeekboard'],
-                               stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL,
-                               env=dict(os.environ, SQUEEKBOARD_FORCE="1"),
-                               start_new_session=True)
-            except Exception as e:
-                logger.debug(f"Error launching squeekboard directly: {e}")
 
         # Method 3: Shell script
         if sys.platform.startswith('linux'):
@@ -318,20 +383,8 @@ Comment=Flexible on-screen keyboard
 
         logger.info("Hiding keyboard")
 
-        # Method 1: Kill onboard process
-        if self.keyboard_type == 'onboard':
-            try:
-                # Kill onboard process
-                subprocess.run(['pkill', '-f', 'onboard'],
-                             stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL)
-                self.keyboard_visible = False
-                self.keyboard_visibility_changed.emit(False)
-            except Exception as e:
-                logger.debug(f"Error hiding onboard: {e}")
-
-        # Method 2: DBus method for squeekboard
-        elif self.keyboard_type == 'squeekboard' and self.dbus_available:
+        # Method 1: DBus method for squeekboard (preferred)
+        if self.keyboard_type == 'squeekboard' and self.dbus_available:
             try:
                 cmd = [
                     "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
@@ -340,8 +393,22 @@ Comment=Flexible on-screen keyboard
                 subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 self.keyboard_visible = False
                 self.keyboard_visibility_changed.emit(False)
+                logger.info("Hid squeekboard via DBus")
             except Exception as e:
                 logger.debug(f"Error hiding keyboard via DBus: {e}")
+
+        # Method 2: Kill onboard process (fallback)
+        elif self.keyboard_type == 'onboard':
+            try:
+                # Kill onboard process
+                subprocess.run(['pkill', '-f', 'onboard'],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+                self.keyboard_visible = False
+                self.keyboard_visibility_changed.emit(False)
+                logger.info("Killed onboard process")
+            except Exception as e:
+                logger.debug(f"Error hiding onboard: {e}")
 
         # Method 3: Shell script
         if sys.platform.startswith('linux'):
