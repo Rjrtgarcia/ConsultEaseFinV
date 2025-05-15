@@ -30,13 +30,6 @@ class AdminDashboardWindow(BaseWindow):
         super().__init__(parent)
         self.init_ui()
 
-        # Set up auto-refresh timer for database data
-        self.refresh_timer = QTimer(self)
-        self.refresh_timer.timeout.connect(self.refresh_all_data)
-
-        # Schedule a refresh after the window is shown
-        QTimer.singleShot(500, self.refresh_all_data)
-
     def init_ui(self):
         """
         Initialize the UI components.
@@ -114,8 +107,16 @@ class AdminDashboardWindow(BaseWindow):
         """
         logger.info("Admin logging out")
 
-        # Clean up resources
-        self.cleanup()
+        # Clean up any resources
+        try:
+            # Clean up student tab resources
+            if hasattr(self, 'student_tab') and self.student_tab:
+                if hasattr(self.student_tab, 'cleanup'):
+                    self.student_tab.cleanup()
+                elif hasattr(self.student_tab, 'scan_dialog') and self.student_tab.scan_dialog:
+                    self.student_tab.scan_dialog.close()
+        except Exception as e:
+            logger.error(f"Error during admin logout cleanup: {str(e)}")
 
         # Hide this window
         self.hide()
@@ -123,35 +124,6 @@ class AdminDashboardWindow(BaseWindow):
         # Emit signal to change to the main login window (RFID scan) instead of admin login
         logger.info("Redirecting to main login window (RFID scan) after admin logout")
         self.change_window.emit("login", None)
-
-    def cleanup(self):
-        """
-        Clean up resources when the window is closed or the user logs out.
-        """
-        logger.info("Cleaning up AdminDashboardWindow resources")
-
-        # Stop the refresh timer
-        if hasattr(self, 'refresh_timer') and self.refresh_timer.isActive():
-            self.refresh_timer.stop()
-            logger.info("Stopped admin dashboard refresh timer")
-
-        # Clean up student tab resources
-        try:
-            if hasattr(self, 'student_tab') and self.student_tab:
-                if hasattr(self.student_tab, 'cleanup'):
-                    self.student_tab.cleanup()
-                elif hasattr(self.student_tab, 'scan_dialog') and self.student_tab.scan_dialog:
-                    self.student_tab.scan_dialog.close()
-        except Exception as e:
-            logger.error(f"Error cleaning up student tab: {str(e)}")
-
-    def closeEvent(self, event):
-        """
-        Handle window close event.
-        """
-        logger.info("AdminDashboardWindow close event")
-        self.cleanup()
-        super().closeEvent(event)
 
     def handle_faculty_updated(self):
         """
@@ -170,53 +142,6 @@ class AdminDashboardWindow(BaseWindow):
         self.student_tab.refresh_data()
         # Forward signal
         self.student_updated.emit()
-
-    def refresh_all_data(self):
-        """
-        Refresh all data in all tabs.
-        This is called when the window is shown and periodically by the timer.
-        """
-        logger.info("Refreshing all admin dashboard data")
-        try:
-            # Force a new database connection to ensure fresh data
-            from ..models import get_db
-            test_db = get_db(force_new=True)
-
-            # Test the connection with a simple query
-            result = test_db.execute("SELECT 1").fetchone()
-            if result and result[0] == 1:
-                logger.info("Database connection verified before refreshing admin dashboard")
-            else:
-                logger.warning("Database connection test returned unexpected result")
-
-            # Close the test connection
-            test_db.close()
-
-            # Refresh data in all tabs
-            if hasattr(self, 'faculty_tab') and self.faculty_tab:
-                self.faculty_tab.refresh_data()
-                logger.info("Refreshed faculty tab data")
-
-            if hasattr(self, 'student_tab') and self.student_tab:
-                self.student_tab.refresh_data()
-                logger.info("Refreshed student tab data")
-
-            if hasattr(self, 'system_tab') and self.system_tab:
-                # Only refresh logs if the tab has a refresh method
-                if hasattr(self.system_tab, 'refresh_data'):
-                    self.system_tab.refresh_data()
-                    logger.info("Refreshed system tab data")
-
-            # Start the periodic refresh timer if it's not already running
-            if not self.refresh_timer.isActive():
-                # Refresh every 60 seconds
-                self.refresh_timer.start(60000)
-                logger.info("Started periodic refresh timer for admin dashboard")
-
-        except Exception as e:
-            logger.error(f"Error refreshing admin dashboard data: {str(e)}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
 
 class FacultyManagementTab(QWidget):
     """
@@ -1480,56 +1405,6 @@ class SystemMaintenanceTab(QWidget):
         self.consultation_controller = None
         self.init_ui()
         self.load_faculty_list()
-
-    def refresh_data(self):
-        """
-        Refresh all data in the system maintenance tab.
-        """
-        logger.info("Refreshing system maintenance tab data")
-        try:
-            # Reload faculty list
-            self.load_faculty_list()
-
-            # Reload settings from file
-            self.load_settings()
-
-            logger.info("System maintenance tab data refreshed successfully")
-        except Exception as e:
-            logger.error(f"Error refreshing system maintenance tab data: {str(e)}")
-
-    def load_settings(self):
-        """
-        Load settings from the settings.ini file.
-        """
-        try:
-            import configparser
-            import pathlib
-
-            # Get the path to the settings.ini file
-            settings_path = pathlib.Path(__file__).parent.parent / "settings.ini"
-
-            if settings_path.exists():
-                logger.info(f"Loading settings from {settings_path}")
-                config = configparser.ConfigParser()
-                config.read(settings_path)
-
-                # Load MQTT settings
-                if 'MQTT' in config:
-                    mqtt_host = config['MQTT'].get('broker_host', 'localhost')
-                    mqtt_port = config['MQTT'].get('broker_port', '1883')
-                    self.mqtt_host_input.setText(mqtt_host)
-                    self.mqtt_port_input.setText(mqtt_port)
-                    logger.info(f"Loaded MQTT settings from file: {mqtt_host}:{mqtt_port}")
-
-                # Load System settings
-                if 'System' in config:
-                    auto_start = config['System'].get('auto_start', 'true').lower() == 'true'
-                    self.auto_start_checkbox.setChecked(auto_start)
-                    logger.info(f"Loaded System settings from file: auto_start={auto_start}")
-            else:
-                logger.warning(f"Settings file not found at {settings_path}, using default values")
-        except Exception as e:
-            logger.error(f"Error loading settings: {str(e)}")
 
     def init_ui(self):
         """

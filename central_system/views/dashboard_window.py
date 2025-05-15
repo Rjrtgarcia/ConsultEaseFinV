@@ -350,64 +350,6 @@ class DashboardWindow(BaseWindow):
         else:
             logger.warning("Dashboard initialized without student information")
 
-    def update_student(self, new_student):
-        """
-        Update the dashboard with a new student's information.
-        This method should be called when a different student logs in.
-
-        Args:
-            new_student (Student): The new student object
-        """
-        # Check if this is actually a different student
-        if self.student and new_student and self.student.id == new_student.id:
-            logger.info(f"Student unchanged, not updating dashboard: ID={new_student.id}")
-            return
-
-        # Log the student change
-        old_student_id = self.student.id if self.student else None
-        new_student_id = new_student.id if new_student else None
-        logger.info(f"Updating dashboard student from ID={old_student_id} to ID={new_student_id}")
-
-        # Update the student reference
-        self.student = new_student
-
-        # Update the welcome message
-        if hasattr(self, 'welcome_label'):
-            if self.student:
-                self.welcome_label.setText(f"Welcome, {self.student.name}")
-            else:
-                self.welcome_label.setText("Welcome to ConsultEase")
-
-        # Update the consultation panel with the new student
-        if hasattr(self, 'consultation_panel'):
-            self.consultation_panel.set_student(new_student)
-            logger.info(f"Updated consultation panel with new student: ID={new_student_id}")
-
-        # Update window title
-        if self.student:
-            self.setWindowTitle(f"ConsultEase - {self.student.name}")
-        else:
-            self.setWindowTitle("ConsultEase")
-
-        # Refresh the faculty grid to ensure it's up to date
-        try:
-            # Import faculty controller
-            from ..controllers import FacultyController
-
-            # Get faculty controller
-            faculty_controller = FacultyController()
-
-            # Get all faculty
-            faculties = faculty_controller.get_all_faculty()
-
-            # Update the grid
-            self.populate_faculty_grid(faculties)
-            logger.info("Refreshed faculty grid after student update")
-        except Exception as e:
-            logger.error(f"Error refreshing faculty grid after student update: {str(e)}")
-
-        logger.info(f"Dashboard successfully updated with new student: ID={new_student_id}, Name={new_student.name if new_student else 'None'}")
-
     def init_ui(self):
         """
         Initialize the dashboard UI.
@@ -418,16 +360,12 @@ class DashboardWindow(BaseWindow):
         # Header with welcome message and student info
         header_layout = QHBoxLayout()
 
-        # Create welcome label and store a reference to it for later updates
         if self.student:
-            self.welcome_label = QLabel(f"Welcome, {self.student.name}")
-            # Set window title with student name
-            self.setWindowTitle(f"ConsultEase - {self.student.name}")
+            welcome_label = QLabel(f"Welcome, {self.student.name}")
         else:
-            self.welcome_label = QLabel("Welcome to ConsultEase")
-            self.setWindowTitle("ConsultEase")
-        self.welcome_label.setStyleSheet("font-size: 24pt; font-weight: bold;")
-        header_layout.addWidget(self.welcome_label)
+            welcome_label = QLabel("Welcome to ConsultEase")
+        welcome_label.setStyleSheet("font-size: 24pt; font-weight: bold;")
+        header_layout.addWidget(welcome_label)
 
         # Logout button - smaller size
         logout_button = QPushButton("Logout")

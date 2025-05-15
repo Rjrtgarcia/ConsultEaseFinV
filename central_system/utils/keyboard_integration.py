@@ -98,7 +98,7 @@ class KeyboardIntegration(QObject):
         """Set up environment variables for keyboard integration."""
         if sys.platform.startswith('linux'):
             os.environ["GDK_BACKEND"] = "wayland,x11"
-            os.environ["QT_QPA_PLATFORM"] = "wayland;xcb"
+            os.environ["QT_QPA_PLATFORM"] = "wayland"
 
             # Squeekboard environment variables (primary)
             os.environ["SQUEEKBOARD_FORCE"] = "1"

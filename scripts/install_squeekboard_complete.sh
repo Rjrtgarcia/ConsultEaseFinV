@@ -82,7 +82,7 @@ ExecStart=/usr/bin/squeekboard
 Restart=on-failure
 Environment=SQUEEKBOARD_FORCE=1
 Environment=GDK_BACKEND=wayland,x11
-Environment=QT_QPA_PLATFORM=wayland;xcb
+Environment="QT_QPA_PLATFORM=wayland;xcb"
 
 [Install]
 WantedBy=graphical-session.target
@@ -117,7 +117,7 @@ mkdir -p ~/.config/environment.d/
 cat > ~/.config/environment.d/consultease-keyboard.conf << EOF
 # ConsultEase keyboard environment variables
 GDK_BACKEND=wayland,x11
-QT_QPA_PLATFORM=wayland;xcb
+QT_QPA_PLATFORM="wayland;xcb"
 SQUEEKBOARD_FORCE=1
 CONSULTEASE_KEYBOARD=squeekboard
 MOZ_ENABLE_WAYLAND=1
@@ -135,7 +135,7 @@ if ! grep -q "CONSULTEASE_KEYBOARD=squeekboard" ~/.bashrc; then
 
 # ConsultEase keyboard environment variables
 export GDK_BACKEND=wayland,x11
-export QT_QPA_PLATFORM=wayland;xcb
+export QT_QPA_PLATFORM="wayland;xcb"
 export SQUEEKBOARD_FORCE=1
 export CONSULTEASE_KEYBOARD=squeekboard
 export MOZ_ENABLE_WAYLAND=1
@@ -162,7 +162,7 @@ else
     # Make sure squeekboard is running
     if ! pgrep -f squeekboard > /dev/null; then
         # Start squeekboard with environment variables
-        SQUEEKBOARD_FORCE=1 GDK_BACKEND=wayland,x11 QT_QPA_PLATFORM=wayland squeekboard &
+        SQUEEKBOARD_FORCE=1 GDK_BACKEND=wayland,x11 QT_QPA_PLATFORM="wayland" squeekboard &
         sleep 0.5
     fi
 
@@ -183,7 +183,7 @@ cat > ~/keyboard-show.sh << EOF
 # Make sure squeekboard is running
 if ! pgrep -f squeekboard > /dev/null; then
     # Start squeekboard with environment variables
-    SQUEEKBOARD_FORCE=1 GDK_BACKEND=wayland,x11 QT_QPA_PLATFORM=wayland squeekboard &
+    SQUEEKBOARD_FORCE=1 GDK_BACKEND=wayland,x11 QT_QPA_PLATFORM="wayland" squeekboard &
     sleep 0.5
 fi
 
@@ -288,7 +288,7 @@ if pgrep -f squeekboard > /dev/null; then
     fi
 else
     echo "✗ Squeekboard is not running. Starting it now..."
-    SQUEEKBOARD_FORCE=1 GDK_BACKEND=wayland,x11 QT_QPA_PLATFORM=wayland squeekboard &
+    SQUEEKBOARD_FORCE=1 GDK_BACKEND=wayland,x11 QT_QPA_PLATFORM="wayland" squeekboard &
     sleep 1
 
     if pgrep -f squeekboard > /dev/null; then

@@ -79,7 +79,7 @@ class KeyboardHandler(QObject):
         # Set environment variables to ensure keyboard backends work properly
         if sys.platform.startswith('linux'):
             os.environ["GDK_BACKEND"] = "wayland,x11"
-            os.environ["QT_QPA_PLATFORM"] = "wayland;xcb"
+            os.environ["QT_QPA_PLATFORM"] = "wayland"
 
             # Set environment variables for squeekboard (primary)
             os.environ["SQUEEKBOARD_FORCE"] = "1"
