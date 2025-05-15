@@ -230,7 +230,8 @@ touch-feedback-size=small
             return env_keyboard
 
         # Check for each supported keyboard in order of preference
-        keyboards = ['onboard', 'squeekboard', 'matchbox-keyboard']
+        # Prioritize squeekboard over onboard
+        keyboards = ['squeekboard', 'onboard', 'matchbox-keyboard']
 
         # Log all available keyboards for debugging
         logger.info("Checking for available on-screen keyboards...")
@@ -470,6 +471,113 @@ touch-feedback-size=small
             logger.debug(f"Error checking squeekboard visibility: {e}")
             return self.keyboard_visible
 
+    def integrate_with_webview(self, webview):
+        """
+        Integrate keyboard handling with a QWebEngineView.
+        This allows the keyboard to be shown when input fields in the web view are focused.
+
+        Args:
+            webview: The QWebEngineView to integrate with
+        """
+        if not webview:
+            logger.warning("Cannot integrate with None webview")
+            return
+
+        logger.info(f"Integrating keyboard handler with webview: {webview}")
+
+        try:
+            # Add JavaScript files to the web view
+            js_files = [
+                "keyboard_focus.js",
+                "keyboard_integration.js"
+            ]
+
+            # Get the base URL for static files
+            import os
+            base_dir = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+            static_dir = os.path.join(base_dir, 'static', 'js')
+
+            # Create a bridge object to communicate with JavaScript
+            from PyQt5.QtWebChannel import QWebChannel
+            from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal
+
+            class WebBridge(QObject):
+                # Signals
+                keyboardRequested = pyqtSignal()
+                keyboardHidden = pyqtSignal()
+
+                def __init__(self, keyboard_handler, parent=None):
+                    super().__init__(parent)
+                    self.keyboard_handler = keyboard_handler
+
+                @pyqtSlot()
+                def showKeyboard(self):
+                    """Show the keyboard when requested from JavaScript"""
+                    logger.info("Keyboard show requested from JavaScript")
+                    if self.keyboard_handler:
+                        self.keyboard_handler.show_keyboard()
+                        self.keyboardRequested.emit()
+
+                @pyqtSlot()
+                def hideKeyboard(self):
+                    """Hide the keyboard when requested from JavaScript"""
+                    logger.info("Keyboard hide requested from JavaScript")
+                    if self.keyboard_handler:
+                        self.keyboard_handler.hide_keyboard()
+                        self.keyboardHidden.emit()
+
+                @pyqtSlot(str)
+                def inputFocused(self, element_info):
+                    """Handle input field focus in the web view"""
+                    logger.info(f"Input field focused in web view: {element_info}")
+                    if self.keyboard_handler:
+                        self.keyboard_handler.show_keyboard()
+
+                @pyqtSlot(str)
+                def inputBlurred(self, element_info):
+                    """Handle input field blur in the web view"""
+                    logger.info(f"Input field blurred in web view: {element_info}")
+                    # Don't hide keyboard on blur, let it be handled manually
+
+            # Create the bridge object
+            bridge = WebBridge(self)
+
+            # Create a web channel
+            channel = QWebChannel(webview)
+            channel.registerObject("keyboardBridge", bridge)
+
+            # Set the web channel on the web view
+            webview.page().setWebChannel(channel)
+
+            # Inject the JavaScript files
+            for js_file in js_files:
+                js_path = os.path.join(static_dir, js_file)
+                if os.path.exists(js_path):
+                    with open(js_path, 'r') as f:
+                        js_code = f.read()
+                        webview.page().runJavaScript(js_code)
+                        logger.info(f"Injected {js_file} into webview")
+                else:
+                    logger.warning(f"JavaScript file not found: {js_path}")
+
+            # Initialize the keyboard integration
+            init_js = """
+            if (typeof initKeyboardIntegration === 'function') {
+                initKeyboardIntegration(keyboardBridge);
+                console.log('Keyboard integration initialized');
+            } else {
+                console.error('initKeyboardIntegration function not found');
+            }
+            """
+            webview.page().runJavaScript(init_js)
+
+            logger.info("Keyboard integration with webview completed")
+
+        except Exception as e:
+            logger.error(f"Error integrating keyboard with webview: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+
     def _check_keyboard_status(self):
         """Periodically check keyboard status and ensure it's running"""
         # Only check every 5 seconds to avoid excessive overhead
@@ -504,9 +612,28 @@ touch-feedback-size=small
                 logger.debug(f"Error checking onboard status: {e}")
 
     def _trigger_squeekboard_dbus(self):
-        """Attempt to show squeekboard via DBus (most reliable method on Linux)"""
+        """
+        Attempt to show squeekboard via DBus (most reliable method on Linux).
+        This method has been enhanced to be more robust and handle various edge cases.
+        """
         if sys.platform.startswith('linux') and self.keyboard_type == 'squeekboard' and self.dbus_available:
             try:
+                # First, ensure squeekboard service is running
+                try:
+                    # Check if squeekboard service is running
+                    check_cmd = "systemctl --user is-active squeekboard.service"
+                    result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+
+                    if "inactive" in result.stdout or "failed" in result.stdout:
+                        logger.info("Squeekboard service not running, attempting to start it...")
+                        start_cmd = "systemctl --user start squeekboard.service"
+                        subprocess.run(start_cmd, shell=True)
+
+                        # Give it a moment to start
+                        time.sleep(0.5)
+                except Exception as e:
+                    logger.debug(f"Error checking squeekboard service: {e}")
+
                 # Try to use dbus-send to force the keyboard
                 cmd = [
                     "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
@@ -515,14 +642,64 @@ touch-feedback-size=small
                 subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 logger.debug("Sent dbus command to show squeekboard")
 
+                # Try an alternative method as well (for some systems)
+                try:
+                    alt_cmd = [
+                        "gdbus", "call", "--session", "--dest=sm.puri.OSK0",
+                        "--object-path=/sm/puri/OSK0", "--method=sm.puri.OSK0.SetVisible", "true"
+                    ]
+                    subprocess.Popen(alt_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    logger.debug("Sent gdbus command to show squeekboard")
+                except Exception:
+                    pass
+
+                # Also try using the keyboard-show.sh script if it exists
+                try:
+                    home_dir = os.path.expanduser("~")
+                    script_path = os.path.join(home_dir, "keyboard-show.sh")
+                    if os.path.exists(script_path):
+                        logger.debug("Using keyboard-show.sh script")
+                        subprocess.Popen([script_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+
                 # Update our internal state
                 self.keyboard_visible = True
                 self.keyboard_visibility_changed.emit(True)
+
+                # Verify that the keyboard is actually visible after a short delay
+                QTimer.singleShot(500, self._verify_keyboard_visible)
+
                 return True
             except Exception as e:
                 logger.debug(f"Error triggering squeekboard via dbus: {e}")
                 return False
         return False
+
+    def _verify_keyboard_visible(self):
+        """Verify that the keyboard is actually visible after a show request"""
+        if self.keyboard_type == 'squeekboard' and self.dbus_available:
+            is_visible = self._is_squeekboard_visible()
+            if not is_visible and self.keyboard_visible:
+                logger.debug("Keyboard should be visible but isn't - trying again")
+                # Try again with more force
+                try:
+                    # Try direct process launch
+                    subprocess.Popen(
+                        ['squeekboard'],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        env=dict(os.environ, SQUEEKBOARD_FORCE="1"),
+                        start_new_session=True
+                    )
+
+                    # Try DBus again after a short delay
+                    QTimer.singleShot(300, lambda: subprocess.Popen([
+                        "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
+                        "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+                except Exception as e:
+                    logger.debug(f"Error in second attempt to show keyboard: {e}")
 
     def _delayed_show_keyboard(self):
         """Show keyboard after a short delay to prevent flicker"""

@@ -194,6 +194,7 @@ class BaseWindow(QMainWindow):
         """
         Toggle the on-screen keyboard visibility.
         This method is connected to both the F5 key and the keyboard toggle button.
+        Prioritizes squeekboard over onboard.
         """
         # Get the keyboard handler from the application
         app = QApplication.instance()
@@ -201,34 +202,117 @@ class BaseWindow(QMainWindow):
             logger.warning("Could not get application instance for keyboard toggle")
             return
 
-        # Find the keyboard handler in the application's event filters
-        keyboard_handler = None
-        for obj in app.children():
-            if hasattr(obj, '__class__') and obj.__class__.__name__ == 'KeyboardHandler':
-                keyboard_handler = obj
-                break
+        # Try multiple methods to toggle the keyboard
 
-        if not keyboard_handler:
-            # Try to get it from the application's property
-            if hasattr(app, 'keyboard_handler'):
-                keyboard_handler = app.keyboard_handler
+        # Method 1: Use direct keyboard integration (preferred)
+        direct_keyboard = None
+        if hasattr(app, 'direct_keyboard'):
+            direct_keyboard = app.direct_keyboard
+            logger.info("Using direct keyboard integration for toggle")
+
+            if direct_keyboard:
+                if hasattr(direct_keyboard, 'keyboard_visible') and direct_keyboard.keyboard_visible:
+                    logger.info("Manually hiding keyboard via direct integration")
+                    direct_keyboard.hide_keyboard()
+                    # Update button text
+                    if hasattr(self, 'keyboard_toggle_button'):
+                        self.keyboard_toggle_button.setText("Show Keyboard")
+                else:
+                    logger.info("Manually showing keyboard via direct integration")
+                    direct_keyboard.show_keyboard()
+                    # Update button text
+                    if hasattr(self, 'keyboard_toggle_button'):
+                        self.keyboard_toggle_button.setText("Hide Keyboard")
+                return
+
+        # Method 2: Use keyboard handler
+        keyboard_handler = None
+        if hasattr(app, 'keyboard_handler'):
+            keyboard_handler = app.keyboard_handler
+        else:
+            # Find the keyboard handler in the application's event filters
+            for obj in app.children():
+                if hasattr(obj, '__class__') and obj.__class__.__name__ == 'KeyboardHandler':
+                    keyboard_handler = obj
+                    break
 
         # If we found a keyboard handler, toggle the keyboard
         if keyboard_handler:
             if hasattr(keyboard_handler, 'keyboard_visible') and keyboard_handler.keyboard_visible:
-                logger.info("Manually hiding keyboard")
+                logger.info("Manually hiding keyboard via keyboard handler")
                 keyboard_handler.hide_keyboard()
                 # Update button text
                 if hasattr(self, 'keyboard_toggle_button'):
                     self.keyboard_toggle_button.setText("Show Keyboard")
             else:
-                logger.info("Manually showing keyboard")
+                logger.info("Manually showing keyboard via keyboard handler")
                 keyboard_handler.force_show_keyboard()
                 # Update button text
                 if hasattr(self, 'keyboard_toggle_button'):
                     self.keyboard_toggle_button.setText("Hide Keyboard")
-        else:
-            logger.warning("Could not find keyboard handler for manual toggle")
+            return
+
+        # Method 3: Direct DBus call for squeekboard (fallback)
+        try:
+            import subprocess
+            import sys
+
+            if sys.platform.startswith('linux'):
+                # Check if squeekboard is visible
+                check_cmd = [
+                    "dbus-send", "--print-reply", "--type=method_call",
+                    "--dest=sm.puri.OSK0", "/sm/puri/OSK0", "sm.puri.OSK0.GetVisible"
+                ]
+
+                try:
+                    result = subprocess.run(check_cmd, capture_output=True, text=True)
+                    is_visible = "boolean true" in result.stdout
+
+                    if is_visible:
+                        # Hide squeekboard
+                        hide_cmd = [
+                            "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
+                            "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:false"
+                        ]
+                        subprocess.Popen(hide_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        logger.info("Manually hiding squeekboard via direct DBus call")
+                        # Update button text
+                        if hasattr(self, 'keyboard_toggle_button'):
+                            self.keyboard_toggle_button.setText("Show Keyboard")
+                    else:
+                        # Show squeekboard
+                        show_cmd = [
+                            "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
+                            "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
+                        ]
+                        subprocess.Popen(show_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        logger.info("Manually showing squeekboard via direct DBus call")
+                        # Update button text
+                        if hasattr(self, 'keyboard_toggle_button'):
+                            self.keyboard_toggle_button.setText("Hide Keyboard")
+                    return
+                except Exception as e:
+                    logger.error(f"Error toggling squeekboard via DBus: {e}")
+        except Exception as e:
+            logger.error(f"Error with direct DBus method: {e}")
+
+        # Method 4: Use keyboard scripts (last resort)
+        try:
+            import os
+            import subprocess
+
+            # Try using the keyboard-toggle.sh script if it exists
+            home_dir = os.path.expanduser("~")
+            script_path = os.path.join(home_dir, "keyboard-toggle.sh")
+            if os.path.exists(script_path):
+                logger.info("Using keyboard-toggle.sh script")
+                subprocess.Popen([script_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
+        except Exception as e:
+            logger.error(f"Error using keyboard toggle script: {e}")
+
+        # If we got here, we couldn't toggle the keyboard
+        logger.warning("Could not find any method to toggle the keyboard")
 
 
 
@@ -246,15 +330,96 @@ class BaseWindow(QMainWindow):
             self.showFullScreen()
 
     def showEvent(self, event):
-        """Override showEvent to apply fullscreen if needed."""
+        """
+        Override showEvent to apply fullscreen if needed and initialize keyboard.
+        This ensures the keyboard is properly set up when any window is shown.
+        """
         # This ensures the window respects the initial fullscreen setting
         # The `fullscreen` flag is set by ConsultEaseApp
         if hasattr(self, 'fullscreen') and self.fullscreen:
             if not self.isFullScreen(): # Avoid toggling if already fullscreen
                 self.showFullScreen()
-        # else:
-        #     # This part might prevent manual toggling out of fullscreen if initial state was fullscreen
-        #     # Let manual toggle handle exiting fullscreen
-        #     pass
+
+        # Initialize keyboard for this window
+        self._initialize_keyboard()
 
         super().showEvent(event)
+
+    def _initialize_keyboard(self):
+        """
+        Initialize the keyboard for this window.
+        This ensures that the keyboard appears when input fields are focused.
+        """
+        # Get the keyboard handler from the application
+        app = QApplication.instance()
+        if not app:
+            logger.warning("Could not get application instance for keyboard initialization")
+            return
+
+        # Try to get keyboard handler from the application
+        keyboard_handler = None
+        if hasattr(app, 'keyboard_handler'):
+            keyboard_handler = app.keyboard_handler
+            logger.info("Found keyboard handler in application")
+
+        # Try to get direct keyboard integration
+        direct_keyboard = None
+        if hasattr(app, 'direct_keyboard'):
+            direct_keyboard = app.direct_keyboard
+            logger.info("Found direct keyboard integration in application")
+
+        # Set keyboard properties on all input fields
+        self._set_keyboard_properties(self)
+
+        # If we have a keyboard handler, ensure it's properly initialized
+        if keyboard_handler:
+            # Update button text based on keyboard visibility
+            if hasattr(keyboard_handler, 'keyboard_visible') and keyboard_handler.keyboard_visible:
+                if hasattr(self, 'keyboard_toggle_button'):
+                    self.keyboard_toggle_button.setText("Hide Keyboard")
+            else:
+                if hasattr(self, 'keyboard_toggle_button'):
+                    self.keyboard_toggle_button.setText("Show Keyboard")
+
+        # Log keyboard initialization
+        logger.info(f"Keyboard initialized for window: {self.__class__.__name__}")
+
+    def _set_keyboard_properties(self, widget):
+        """
+        Recursively set keyboard properties on all input fields.
+        This ensures that the keyboard appears when any input field is focused.
+
+        Args:
+            widget: The widget to process (recursively processes all children)
+        """
+        # Process all child widgets
+        for child in widget.findChildren(QApplication.focusWidget().__class__):
+            # Check if this is an input widget that should trigger the keyboard
+            if child.__class__.__name__ in ['QLineEdit', 'QTextEdit', 'QPlainTextEdit']:
+                # Set property to show keyboard on focus
+                child.setProperty("keyboardOnFocus", True)
+                logger.debug(f"Set keyboardOnFocus property on {child.__class__.__name__}")
+
+                # Connect focus events if not already connected
+                if not hasattr(child, '_keyboard_focus_connected'):
+                    # Store original focusInEvent method
+                    original_focus_in = child.focusInEvent
+
+                    # Create new focusInEvent method that shows keyboard
+                    def new_focus_in(event):
+                        # Call original method
+                        original_focus_in(event)
+
+                        # Show keyboard
+                        app = QApplication.instance()
+                        if app and hasattr(app, 'keyboard_handler'):
+                            app.keyboard_handler.show_keyboard()
+                        elif app and hasattr(app, 'direct_keyboard'):
+                            app.direct_keyboard.show_keyboard()
+
+                    # Replace focusInEvent method
+                    child.focusInEvent = new_focus_in
+
+                    # Mark as connected
+                    child._keyboard_focus_connected = True
+                    logger.debug(f"Connected focus events for {child.__class__.__name__}")

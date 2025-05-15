@@ -1,6 +1,6 @@
 # ConsultEase Quick Start Guide
 
-This guide provides the essential steps to quickly set up and run the ConsultEase system. For a more comprehensive setup, refer to the full [Deployment Guide](deployment_guide_updated.md).
+This guide provides the essential steps to quickly set up and run the ConsultEase system. For a more comprehensive setup, refer to the full [Deployment Guide](deployment_guide.md).
 
 ## Central System Setup (Raspberry Pi)
 
@@ -44,15 +44,15 @@ DB_HOST=localhost
 DB_NAME=consultease
 MQTT_BROKER_HOST=localhost
 MQTT_BROKER_PORT=1883
-CONSULTEASE_KEYBOARD=onboard
+CONSULTEASE_KEYBOARD=squeekboard
 EOF
 ```
 
 ### 4. Install On-Screen Keyboard
 ```bash
-# Install and configure onboard keyboard
-chmod +x scripts/install_onboard.sh
-./scripts/install_onboard.sh
+# Install and configure squeekboard (preferred keyboard)
+chmod +x scripts/install_squeekboard.sh
+./scripts/install_squeekboard.sh
 ```
 
 ### 5. Initialize Database
@@ -96,9 +96,16 @@ python3 central_system/main.py
 - Find the TFT_eSPI library folder (usually in Documents/Arduino/libraries)
 - Replace User_Setup.h with the one from ConsultEase/faculty_desk_unit/config/
 
-### 4. Upload Firmware
+### 4. Configure Faculty Desk Unit
+- Open faculty_desk_unit/config.h in Arduino IDE
+- Update the following settings:
+  - WiFi credentials (WIFI_SSID and WIFI_PASSWORD)
+  - MQTT broker IP address (MQTT_SERVER)
+  - Faculty ID and name (FACULTY_ID and FACULTY_NAME)
+  - BLE settings (including always-on option if desired)
+
+### 5. Upload Firmware
 - Open faculty_desk_unit/faculty_desk_unit.ino in Arduino IDE
-- Update WiFi credentials and MQTT broker IP
 - Select your ESP32 board from Tools > Board
 - Connect ESP32 via USB and select the correct port
 - Click Upload
@@ -211,4 +218,4 @@ After completing this quick setup:
 
 5. **Optimize Performance**: Refer to the full deployment guide for performance optimization tips.
 
-For more detailed instructions and troubleshooting, refer to the full [Deployment Guide](deployment_guide_updated.md) and [IMPROVEMENTS.md](../IMPROVEMENTS.md) for recent enhancements.
+For more detailed instructions and troubleshooting, refer to the full [Deployment Guide](deployment_guide.md), [User Manual](user_manual.md), and [Recent Improvements](recent_improvements.md) documentation.

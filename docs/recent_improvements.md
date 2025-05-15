@@ -5,11 +5,11 @@ This document outlines the recent improvements made to the ConsultEase system to
 ## On-Screen Keyboard Improvements
 
 ### What Changed
-- **Onboard Prioritization**: The system now prioritizes the onboard keyboard over squeekboard for better touch input support
+- **Squeekboard Prioritization**: The system now prioritizes the squeekboard keyboard over onboard for better integration with the Raspberry Pi environment
 - **Improved Detection**: Better detection of available keyboard implementations
 - **Enhanced Show/Hide Logic**: More reliable keyboard appearance and disappearance
 - **Fallback Mechanisms**: Multiple fallback options when preferred keyboard is unavailable
-- **Installation Script**: New comprehensive installation script for onboard
+- **Installation Script**: Comprehensive installation script for squeekboard
 
 ### Benefits
 - More reliable text input on touchscreens
@@ -18,17 +18,22 @@ This document outlines the recent improvements made to the ConsultEase system to
 - Easier setup and configuration
 
 ### How to Use
-Run the new installation script to set up the improved keyboard:
+Run the installation script to set up the improved keyboard:
 ```bash
 cd /path/to/consultease
-chmod +x scripts/install_onboard.sh
-./scripts/install_onboard.sh
+chmod +x scripts/install_squeekboard.sh
+./scripts/install_squeekboard.sh
 ```
 
 After installation, you'll have these keyboard management scripts:
 - `~/keyboard-toggle.sh` - Toggle keyboard visibility
 - `~/keyboard-show.sh` - Force show keyboard
 - `~/keyboard-hide.sh` - Force hide keyboard
+
+If you encounter any issues with the keyboard, you can run the fix script:
+```bash
+./scripts/fix_keyboard.sh
+```
 
 ## MQTT Communication Improvements
 
@@ -91,6 +96,9 @@ This script will:
 - **Platform Detection**: Better detection of platform capabilities for appropriate transition effects
 - **Improved Consultation Panel**: Enhanced user feedback and auto-refresh functionality
 - **Tab Animations**: Better visual cues for tab changes
+- **Smaller Logout Button**: Made the logout button smaller in the dashboard
+- **Improved Readability**: Enhanced the consultation panel's readability
+- **Better User Feedback**: Added more informative success/error messages
 
 ### Benefits
 - More professional and polished user interface
@@ -150,8 +158,8 @@ If you already have ConsultEase installed, follow these steps to update to the l
 
 2. **Install the improved keyboard**:
    ```bash
-   chmod +x scripts/install_onboard.sh
-   ./scripts/install_onboard.sh
+   chmod +x scripts/install_squeekboard.sh
+   ./scripts/install_squeekboard.sh
    ```
 
 3. **Update Python dependencies**:
@@ -163,7 +171,7 @@ If you already have ConsultEase installed, follow these steps to update to the l
    ```bash
    # If running as a service
    sudo systemctl restart consultease.service
-   
+
    # Or start manually
    python3 central_system/main.py
    ```

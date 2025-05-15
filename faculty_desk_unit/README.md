@@ -37,32 +37,39 @@ The following libraries need to be installed via the Arduino Library Manager:
 - Adafruit_GFX
 - Adafruit_ST7789
 - time
+- NimBLE-Arduino (for BLE beacon)
 
 ## Setup and Configuration
 
 1. Install the required libraries in Arduino IDE
 2. Open `faculty_desk_unit.ino` in Arduino IDE
-3. Update the following settings in the code:
-   - WiFi credentials (`ssid` and `password`)
-   - MQTT broker IP address (`mqtt_server`)
-   - Current user name (`current_user`)
+3. Update the configuration in `config.h`:
+   - WiFi credentials (`WIFI_SSID` and `WIFI_PASSWORD`)
+   - MQTT broker IP address (`MQTT_SERVER`)
+   - Faculty ID and name (`FACULTY_ID` and `FACULTY_NAME`)
+   - BLE settings (including always-on option)
 4. Compile and upload to your ESP32
 
 ## Testing
 
-To test the faculty desk unit, you can use the test scripts in the `test_scripts` directory:
+To test the faculty desk unit, you can use the new BLE test script:
 
 1. Make sure the central system is running
 2. Make sure the MQTT broker is running
-3. Run the test script:
-   - On Windows: `test_scripts\test_faculty_desk_unit.bat`
-   - On Linux/macOS: `bash test_scripts/test_faculty_desk_unit.sh`
+3. Run the BLE test script:
+   ```bash
+   python scripts/test_ble_connection.py test
+   ```
 
-This will:
-1. Create a faculty member named "Jeysibn" in the database
-2. Simulate a BLE beacon connected event
-3. Send a consultation request
-4. Simulate a BLE beacon disconnected event
+This script will:
+1. Simulate a BLE beacon
+2. Simulate a faculty desk unit
+3. Test MQTT communication between components
+4. Verify proper status updates
+
+You can also use the older test scripts in the `test_scripts` directory:
+- On Windows: `test_scripts\test_faculty_desk_unit.bat`
+- On Linux/macOS: `bash test_scripts/test_faculty_desk_unit.sh`
 
 ## Usage
 

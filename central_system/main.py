@@ -347,9 +347,9 @@ class ConsultEaseApp:
 
         # Define a callback for after the transition completes
         def after_transition():
-            # Set environment variable to prefer onboard
-            os.environ["CONSULTEASE_KEYBOARD"] = "onboard"
-            logger.info("Set CONSULTEASE_KEYBOARD=onboard environment variable")
+            # Set environment variable to prefer squeekboard
+            os.environ["CONSULTEASE_KEYBOARD"] = "squeekboard"
+            logger.info("Set CONSULTEASE_KEYBOARD=squeekboard environment variable")
 
             # Force the keyboard to show using both methods
             if self.keyboard_handler:
@@ -369,29 +369,64 @@ class ConsultEaseApp:
                 QTimer.singleShot(1000, lambda: self.direct_keyboard.show_keyboard())
                 QTimer.singleShot(1500, lambda: self.direct_keyboard.show_keyboard())
 
-            # Try direct onboard launch as a fallback
+            # Try direct squeekboard launch as a fallback
             try:
-                # Check if onboard is available
-                onboard_check = subprocess.run(['which', 'onboard'],
+                # Check if squeekboard is available
+                squeekboard_check = subprocess.run(['which', 'squeekboard'],
                                             stdout=subprocess.PIPE,
                                             stderr=subprocess.PIPE)
 
-                if onboard_check.returncode == 0:
+                if squeekboard_check.returncode == 0:
                     # Kill any existing instances
-                    subprocess.run(['pkill', '-f', 'onboard'],
+                    subprocess.run(['pkill', '-f', 'squeekboard'],
                                  stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL)
 
-                    # Start onboard with appropriate options
-                    subprocess.Popen(
-                        ['onboard', '--size=small', '--layout=Phone', '--enable-background-transparency', '--theme=Nightshade'],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        start_new_session=True
-                    )
-                    logger.info("Started onboard directly from admin login")
+                    # Start squeekboard with appropriate options
+                    env = dict(os.environ)
+                    env['SQUEEKBOARD_FORCE'] = '1'
+                    env['GDK_BACKEND'] = 'wayland,x11'
+                    env['QT_QPA_PLATFORM'] = 'wayland;xcb'
+
+                    subprocess.Popen(['squeekboard'],
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL,
+                                   env=env,
+                                   start_new_session=True)
+
+                    # Try DBus method to show squeekboard
+                    QTimer.singleShot(500, lambda: subprocess.Popen([
+                        "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
+                        "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+
+                    logger.info("Started squeekboard directly from admin login")
             except Exception as e:
-                logger.error(f"Error starting onboard directly: {e}")
+                logger.error(f"Error starting squeekboard directly: {e}")
+
+                # Try onboard as fallback if squeekboard fails
+                try:
+                    # Check if onboard is available
+                    onboard_check = subprocess.run(['which', 'onboard'],
+                                                stdout=subprocess.PIPE,
+                                                stderr=subprocess.PIPE)
+
+                    if onboard_check.returncode == 0:
+                        # Kill any existing instances
+                        subprocess.run(['pkill', '-f', 'onboard'],
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+
+                        # Start onboard with appropriate options
+                        subprocess.Popen(
+                            ['onboard', '--size=small', '--layout=Phone', '--enable-background-transparency', '--theme=Nightshade'],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            start_new_session=True
+                        )
+                        logger.info("Started onboard as fallback from admin login")
+                except Exception as e2:
+                    logger.error(f"Error starting onboard as fallback: {e2}")
 
             # Focus the username input to trigger the keyboard
             QTimer.singleShot(300, lambda: self.admin_login_window.username_input.setFocus())

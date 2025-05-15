@@ -5,7 +5,7 @@ This document outlines the improvements made to the ConsultEase system to fix bu
 ## 1. On-Screen Keyboard Improvements
 
 ### Issues Fixed:
-- Replaced squeekboard with onboard as the preferred on-screen keyboard
+- Prioritized squeekboard over onboard as the preferred on-screen keyboard
 - Added better detection of available keyboard implementations
 - Improved keyboard show/hide logic to be more reliable
 - Added fallback mechanisms when preferred keyboard is not available
@@ -13,16 +13,18 @@ This document outlines the improvements made to the ConsultEase system to fix bu
 ### Files Modified:
 - `central_system/utils/direct_keyboard.py`
   - Added keyboard type detection
-  - Prioritized onboard over squeekboard
+  - Prioritized squeekboard over onboard
   - Improved error handling and logging
   - Added installation script generation
 
 ### New Scripts:
-- `scripts/install_onboard.sh`
-  - Script to install and configure onboard keyboard
-  - Disables squeekboard to avoid conflicts
+- `scripts/install_squeekboard.sh`
+  - Script to install and configure squeekboard keyboard
   - Sets up environment variables for proper keyboard operation
   - Creates keyboard management scripts
+- `scripts/fix_keyboard.sh`
+  - Script to troubleshoot keyboard issues
+  - Detects and fixes common keyboard problems
 
 ## 2. MQTT Communication Improvements
 
@@ -60,18 +62,25 @@ This document outlines the improvements made to the ConsultEase system to fix bu
 - Improved platform detection for transition effects
 - Added better user feedback in consultation panel
 - Implemented auto-refresh for consultation history
+- Made the logout button smaller in the dashboard
+- Improved consultation panel readability
 
 ### Files Modified:
 - `central_system/utils/transitions.py`
   - Improved platform detection for transition effects
   - Enhanced fade_out_in method with cross-fade effect
   - Added slide animation for platforms that don't support opacity
-  
+
 - `central_system/views/consultation_panel.py`
   - Added auto-refresh timer for history panel
   - Improved tab change animations
   - Enhanced user feedback with success/error messages
   - Added tab highlighting for better visual cues
+
+- `central_system/views/dashboard_window.py`
+  - Made the logout button smaller for better UI balance
+  - Improved faculty status display
+  - Enhanced overall layout and spacing
 
 ### New Scripts:
 - `scripts/test_ui_improvements.py`
@@ -96,10 +105,11 @@ This document outlines the improvements made to the ConsultEase system to fix bu
 ## How to Test the Improvements
 
 ### Testing On-Screen Keyboard:
-1. Run `scripts/install_onboard.sh` to install and configure onboard
+1. Run `scripts/install_squeekboard.sh` to install and configure squeekboard
 2. Start the application with `python central_system/main.py`
 3. Click on any text input field to verify the keyboard appears
 4. Press F5 to toggle the keyboard visibility
+5. If the keyboard doesn't appear, run `scripts/fix_keyboard.sh` to troubleshoot
 
 ### Testing MQTT Communication:
 1. Start the MQTT broker with `mosquitto -v`

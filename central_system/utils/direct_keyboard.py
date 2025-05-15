@@ -1,7 +1,7 @@
 """
 Direct keyboard integration for ConsultEase.
-This module provides direct keyboard integration with onboard and other on-screen keyboards
-that works on all platforms. Prioritizes onboard over squeekboard as per user preference.
+This module provides direct keyboard integration with squeekboard and other on-screen keyboards
+that works on all platforms. Prioritizes squeekboard over onboard as per user preference.
 """
 import os
 import sys
@@ -18,7 +18,7 @@ class DirectKeyboard(QObject):
     """
     Direct keyboard integration for on-screen keyboards.
     This class provides direct keyboard integration that works on all platforms.
-    Prioritizes onboard over squeekboard as per user preference.
+    Prioritizes squeekboard over onboard as per user preference.
     """
     # Signal emitted when keyboard visibility changes
     keyboard_visibility_changed = pyqtSignal(bool)
@@ -32,7 +32,7 @@ class DirectKeyboard(QObject):
         self.last_show_attempt = 0
         self.show_attempts = 0
 
-        # Determine which keyboard to use (prioritize onboard)
+        # Determine which keyboard to use (prioritize squeekboard)
         self.keyboard_type = self._detect_keyboard()
 
         # Set up timer for periodic checks
@@ -47,7 +47,7 @@ class DirectKeyboard(QObject):
         self._ensure_keyboard_installed()
 
     def _detect_keyboard(self):
-        """Detect which keyboard to use, prioritizing onboard."""
+        """Detect which keyboard to use, prioritizing squeekboard."""
         # Check environment variable first
         if "CONSULTEASE_KEYBOARD" in os.environ:
             keyboard_type = os.environ["CONSULTEASE_KEYBOARD"].lower()
@@ -55,18 +55,7 @@ class DirectKeyboard(QObject):
                 logger.info(f"Using keyboard from environment variable: {keyboard_type}")
                 return keyboard_type
 
-        # Check if onboard is installed (preferred)
-        try:
-            result = subprocess.run(['which', 'onboard'],
-                                  stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE)
-            if result.returncode == 0:
-                logger.info("Detected onboard keyboard")
-                return "onboard"
-        except Exception:
-            pass
-
-        # Check if squeekboard is installed (fallback)
+        # Check if squeekboard is installed (preferred)
         try:
             result = subprocess.run(['which', 'squeekboard'],
                                   stdout=subprocess.PIPE,
@@ -77,16 +66,62 @@ class DirectKeyboard(QObject):
         except Exception:
             pass
 
-        # Default to onboard even if not installed yet
-        logger.info("No keyboard detected, defaulting to onboard")
-        return "onboard"
+        # Check if onboard is installed (fallback)
+        try:
+            result = subprocess.run(['which', 'onboard'],
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE)
+            if result.returncode == 0:
+                logger.info("Detected onboard keyboard")
+                return "onboard"
+        except Exception:
+            pass
+
+        # Default to squeekboard even if not installed yet
+        logger.info("No keyboard detected, defaulting to squeekboard")
+        return "squeekboard"
 
     def _ensure_keyboard_installed(self):
         """Ensure the selected keyboard is installed."""
         if not sys.platform.startswith('linux'):
             return
 
-        if self.keyboard_type == "onboard":
+        if self.keyboard_type == "squeekboard":
+            try:
+                # Check if squeekboard is installed
+                result = subprocess.run(['which', 'squeekboard'],
+                                      stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE)
+                if result.returncode != 0:
+                    logger.warning("Squeekboard not installed. Creating installation script...")
+
+                    # Create a script to install squeekboard
+                    script_path = os.path.expanduser("~/install-squeekboard.sh")
+                    with open(script_path, 'w') as f:
+                        f.write("""#!/bin/bash
+echo "Installing squeekboard keyboard..."
+sudo apt update
+sudo apt install -y squeekboard
+echo "Setting up environment variables..."
+mkdir -p ~/.config/environment.d/
+cat > ~/.config/environment.d/consultease-keyboard.conf << EOL
+# ConsultEase keyboard environment variables
+GDK_BACKEND=wayland,x11
+QT_QPA_PLATFORM=wayland;xcb
+SQUEEKBOARD_FORCE=1
+CONSULTEASE_KEYBOARD=squeekboard
+MOZ_ENABLE_WAYLAND=1
+QT_IM_MODULE=wayland
+CLUTTER_IM_MODULE=wayland
+EOL
+echo "Squeekboard installation complete!"
+""")
+                    os.chmod(script_path, 0o755)
+                    logger.info(f"Created squeekboard installation script at {script_path}")
+                    logger.info("Please run the script to install squeekboard")
+            except Exception as e:
+                logger.error(f"Error checking/installing squeekboard: {e}")
+        elif self.keyboard_type == "onboard":
             try:
                 # Check if onboard is installed
                 result = subprocess.run(['which', 'onboard'],
@@ -126,14 +161,14 @@ echo "Onboard installation complete!"
             return
 
         try:
-            # First check if onboard is running
-            result = subprocess.run(['pgrep', '-f', 'onboard'],
+            # First check if squeekboard is running
+            result = subprocess.run(['pgrep', '-f', 'squeekboard'],
                                   stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE)
 
-            # If onboard is not running, check for squeekboard
+            # If squeekboard is not running, check for onboard
             if result.returncode != 0:
-                result = subprocess.run(['pgrep', '-f', 'squeekboard'],
+                result = subprocess.run(['pgrep', '-f', 'onboard'],
                                       stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE)
 
@@ -164,14 +199,14 @@ echo "Onboard installation complete!"
         if not sys.platform.startswith('linux'):
             return
 
-        if self.keyboard_type == "onboard":
-            self._show_onboard()
-        elif self.keyboard_type == "squeekboard":
+        if self.keyboard_type == "squeekboard":
             self._show_squeekboard()
+        elif self.keyboard_type == "onboard":
+            self._show_onboard()
         else:
             # Try all methods as fallback
-            self._show_onboard()
             self._show_squeekboard()
+            self._show_onboard()
             self._try_matchbox_keyboard()
 
         # Emit signal
@@ -288,14 +323,14 @@ echo "Onboard installation complete!"
         if not sys.platform.startswith('linux'):
             return
 
-        if self.keyboard_type == "onboard":
-            self._hide_onboard()
-        elif self.keyboard_type == "squeekboard":
+        if self.keyboard_type == "squeekboard":
             self._hide_squeekboard()
+        elif self.keyboard_type == "onboard":
+            self._hide_onboard()
         else:
             # Try all methods as fallback
-            self._hide_onboard()
             self._hide_squeekboard()
+            self._hide_onboard()
             self._hide_other_keyboards()
 
         # Emit signal

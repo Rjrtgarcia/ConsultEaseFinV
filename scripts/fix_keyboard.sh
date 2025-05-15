@@ -3,19 +3,19 @@
 echo "ConsultEase Keyboard Fixer"
 echo "==========================="
 
-# Check if onboard is installed
-if ! command -v onboard &> /dev/null; then
-    echo "Onboard not found, installing..."
+# Check if squeekboard is installed
+if ! command -v squeekboard &> /dev/null; then
+    echo "Squeekboard not found, installing..."
     sudo apt update
-    sudo apt install -y onboard
+    sudo apt install -y squeekboard
 
-    # If onboard installation fails, try squeekboard
-    if ! command -v onboard &> /dev/null; then
-        echo "Onboard installation failed, trying squeekboard..."
-        sudo apt install -y squeekboard
+    # If squeekboard installation fails, try onboard
+    if ! command -v squeekboard &> /dev/null; then
+        echo "Squeekboard installation failed, trying onboard..."
+        sudo apt install -y onboard
     fi
 else
-    echo "Onboard is installed."
+    echo "Squeekboard is installed."
 fi
 
 # Configure onboard
@@ -80,11 +80,13 @@ echo "Setting up environment variables..."
 mkdir -p ~/.config/environment.d/
 cat > ~/.config/environment.d/consultease-keyboard.conf << EOF
 # ConsultEase keyboard environment variables
-ONBOARD_ENABLE_TOUCH=1
-ONBOARD_XEMBED=1
 GDK_BACKEND=wayland,x11
 QT_QPA_PLATFORM=wayland;xcb
-CONSULTEASE_KEYBOARD=onboard
+SQUEEKBOARD_FORCE=1
+CONSULTEASE_KEYBOARD=squeekboard
+MOZ_ENABLE_WAYLAND=1
+QT_IM_MODULE=wayland
+CLUTTER_IM_MODULE=wayland
 EOF
 
 # Also add to .bashrc for immediate effect
@@ -93,11 +95,13 @@ if ! grep -q "CONSULTEASE_KEYBOARD" ~/.bashrc; then
     cat >> ~/.bashrc << EOF
 
 # ConsultEase keyboard environment variables
-export ONBOARD_ENABLE_TOUCH=1
-export ONBOARD_XEMBED=1
 export GDK_BACKEND=wayland,x11
 export QT_QPA_PLATFORM=wayland;xcb
-export CONSULTEASE_KEYBOARD=onboard
+export SQUEEKBOARD_FORCE=1
+export CONSULTEASE_KEYBOARD=squeekboard
+export MOZ_ENABLE_WAYLAND=1
+export QT_IM_MODULE=wayland
+export CLUTTER_IM_MODULE=wayland
 EOF
 fi
 
@@ -107,23 +111,23 @@ cat > ~/keyboard-toggle.sh << EOF
 #!/bin/bash
 # Toggle on-screen keyboard visibility
 
-# Check for onboard first
-if command -v onboard &> /dev/null; then
-    if pgrep -f onboard > /dev/null; then
-        pkill -f onboard
-        echo "Onboard keyboard hidden"
-    else
-        onboard --size=small --layout=Phone --enable-background-transparency &
-        echo "Onboard keyboard shown"
-    fi
-# Check for squeekboard
-elif command -v dbus-send &> /dev/null; then
+# Check for squeekboard first
+if command -v dbus-send &> /dev/null; then
     if dbus-send --print-reply --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.GetVisible | grep -q "boolean true"; then
         dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:false
         echo "Squeekboard hidden"
     else
         dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
         echo "Squeekboard shown"
+    fi
+# Check for onboard as fallback
+elif command -v onboard &> /dev/null; then
+    if pgrep -f onboard > /dev/null; then
+        pkill -f onboard
+        echo "Onboard keyboard hidden"
+    else
+        onboard --size=small --layout=Phone --enable-background-transparency &
+        echo "Onboard keyboard shown"
     fi
 # Try matchbox as last resort
 elif command -v matchbox-keyboard &> /dev/null; then
@@ -142,15 +146,15 @@ chmod +x ~/keyboard-toggle.sh
 
 # Try to show keyboard now
 echo "Attempting to show keyboard..."
-if command -v onboard &> /dev/null; then
-    # Start onboard
-    pkill -f onboard
-    onboard --size=small --layout=Phone --enable-background-transparency &
-    echo "Started onboard"
-elif command -v dbus-send &> /dev/null; then
+if command -v dbus-send &> /dev/null; then
     # Try squeekboard
     dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
     echo "Attempted to show squeekboard"
+elif command -v onboard &> /dev/null; then
+    # Start onboard as fallback
+    pkill -f onboard
+    onboard --size=small --layout=Phone --enable-background-transparency &
+    echo "Started onboard as fallback"
 fi
 
 echo ""

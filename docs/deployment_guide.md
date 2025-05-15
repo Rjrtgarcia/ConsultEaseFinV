@@ -1,6 +1,6 @@
 # ConsultEase Deployment Guide
 
-This guide provides step-by-step instructions for deploying the complete ConsultEase system, including both the Central System (Raspberry Pi) and the Faculty Desk Units (ESP32).
+This guide provides comprehensive instructions for deploying the complete ConsultEase system, including both the Central System (Raspberry Pi) and the Faculty Desk Units (ESP32). This guide incorporates all recent improvements to the system.
 
 ## Table of Contents
 
@@ -200,30 +200,63 @@ Install the following libraries via the Arduino Library Manager (Tools > Manage 
 2. Update the configuration section with your settings:
    - WiFi credentials
    - MQTT broker address (Raspberry Pi IP)
-   - Faculty BLE beacon MAC address
    - Faculty ID (matching database record)
    - Faculty name
+   - BLE settings (including always-on option)
 3. Connect the ESP32 to your computer via USB
 4. Select the correct board and port in Arduino IDE
 5. Click the Upload button
 6. Monitor the serial output to verify the connection
 
+Note: The faculty desk unit now supports an always-on BLE option, which keeps the faculty status as "Available" even when no BLE beacon is detected. This is configured in the `config.h` file.
+
 ## BLE Beacon Setup
 
-### 1. BLE Beacon Firmware Upload
-1. Open the `faculty_desk_unit/ble_beacon/ble_beacon.ino` file in Arduino IDE
-2. Connect the ESP32 to your computer via USB
-3. Select the correct board and port in Arduino IDE
-4. Click the Upload button
-5. Monitor the serial output to get the MAC address of the beacon
-6. Note this MAC address for use in the Faculty Desk Unit configuration
+### 1. Testing BLE Functionality
+Before deploying the BLE beacons, you can test the BLE functionality using the provided test script:
+```bash
+cd /path/to/consultease
+python scripts/test_ble_connection.py test
+```
 
-### 2. Beacon Configuration
+This script will:
+- Simulate a BLE beacon
+- Simulate a faculty desk unit
+- Test MQTT communication between components
+- Verify proper status updates
+
+### 2. BLE Beacon Firmware Upload
+1. Open the `faculty_desk_unit/ble_beacon/ble_beacon.ino` file in Arduino IDE
+2. Update the configuration in `ble_beacon/config.h`:
+   - Faculty ID (matching database record)
+   - Faculty name
+   - Device name
+   - Advertising interval
+3. Connect the ESP32 to your computer via USB
+4. Select the correct board and port in Arduino IDE
+5. Click the Upload button
+6. Monitor the serial output to get the MAC address of the beacon
+7. Note this MAC address for use in the Faculty Desk Unit configuration
+
+### 3. Beacon Configuration
 1. Optionally, customize the beacon settings:
    - Device name
    - Advertising interval
    - LED behavior
 2. For battery-powered operation, configure power management settings
+
+### 4. MQTT Communication Testing
+Test the MQTT communication between components:
+```bash
+# Subscribe to faculty status topic
+mosquitto_sub -t "consultease/faculty/+/status"
+
+# Subscribe to consultation requests topic
+mosquitto_sub -t "consultease/faculty/+/requests"
+
+# Publish a test message
+mosquitto_pub -t "consultease/faculty/1/status" -m "keychain_connected"
+```
 
 ## Network Configuration
 
@@ -291,7 +324,19 @@ Configure your router to forward the necessary ports if remote access is require
 
 ## System Testing
 
-### 1. Central System Testing
+### 1. UI Improvements Testing
+Test the improved UI components:
+```bash
+cd /path/to/consultease
+python scripts/test_ui_improvements.py
+```
+
+This script will:
+- Test the improved UI transitions
+- Test the enhanced consultation panel
+- Verify smooth animations and proper user feedback
+
+### 2. Central System Testing
 1. Verify RFID scanning works:
    - Scan an RFID card at the login screen
    - Check the logs for detection
@@ -301,8 +346,12 @@ Configure your router to forward the necessary ports if remote access is require
    - Submit a test consultation request
    - Verify it appears in the database
    - Verify MQTT message is sent
+4. Test UI improvements:
+   - Verify smooth transitions between screens
+   - Test the improved consultation panel
+   - Check that the logout button is properly sized
 
-### 2. Faculty Desk Unit Testing
+### 3. Faculty Desk Unit Testing
 1. Verify connectivity:
    - Check WiFi connection
    - Verify MQTT connection to Raspberry Pi
@@ -310,10 +359,15 @@ Configure your router to forward the necessary ports if remote access is require
    - Bring the BLE beacon near the unit
    - Verify status changes to "Available"
    - Move the beacon away
-   - Verify status changes to "Unavailable" after timeout
+   - If not using always-on mode, verify status changes to "Unavailable" after timeout
+   - If using always-on mode, verify status remains "Available"
 3. Test consultation display:
    - Submit a consultation request from the Central System
    - Verify it appears on the Faculty Desk Unit display
+4. Test BLE functionality with the test script:
+   ```bash
+   python scripts/test_ble_connection.py test
+   ```
 
 ## Troubleshooting
 
@@ -321,16 +375,24 @@ Configure your router to forward the necessary ports if remote access is require
 - **RFID reader not detected**: Check USB connection and device permissions
 - **Database connection errors**: Verify PostgreSQL is running and credentials are correct
 - **UI scaling issues**: Adjust Qt screen scaling or resolution settings
+- **On-screen keyboard not appearing**: Run `~/keyboard-show.sh` or press F5 to toggle keyboard
 
 ### Faculty Desk Unit Issues
 - **WiFi connection problems**: Check network credentials and signal strength
 - **Display not working**: Verify SPI connections and TFT_eSPI configuration
 - **BLE detection issues**: Check beacon MAC address and RSSI threshold
+- **Always showing Available**: This is expected if using the always-on BLE option in config.h
 
 ### MQTT Communication Issues
 - **Connection failures**: Verify Mosquitto is running and accessible
 - **Message not received**: Check topic names and subscription status
 - **Delayed updates**: Check network latency and MQTT QoS settings
+- **Reconnection issues**: The system now uses exponential backoff for reconnection attempts
+
+### UI Issues
+- **Transitions not working**: Some platforms may not support opacity-based transitions
+- **Consultation panel not refreshing**: Check auto-refresh timer settings
+- **Keyboard not appearing**: Try different keyboard types (squeekboard, onboard)
 
 ### For Additional Help
 - Check the logs:
@@ -366,6 +428,8 @@ The script will attempt to install one of the following keyboards (in order of p
 - onboard (alternative)
 - matchbox-keyboard (fallback)
 
+Note: The system now prefers squeekboard over onboard for better touch input support and integration with the Raspberry Pi environment.
+
 ### 2. Enable Fullscreen Mode
 
 To utilize the full touchscreen area, uncomment the following line in `central_system/views/base_window.py`:
@@ -397,6 +461,11 @@ To test the touch interface and keyboard functionality:
 2. Tap on any text input field (like the Admin Login username field)
 3. The on-screen keyboard should automatically appear
 4. When you tap outside the text field, the keyboard should close
+
+If the keyboard doesn't appear automatically, you can:
+- Press F5 to toggle the keyboard visibility
+- Run `~/keyboard-show.sh` to manually show the keyboard
+- Run `./scripts/fix_keyboard.sh` to troubleshoot keyboard issues
 
 ## Performance Optimization
 
@@ -480,13 +549,20 @@ The ConsultEase system has undergone significant improvements to enhance stabili
    - Added exponential backoff for reconnection attempts
    - Improved error handling for network disconnections
    - Enhanced message delivery reliability
+   - Added keep-alive mechanism to detect disconnections
 
-3. **Admin Dashboard**:
+3. **BLE Functionality**:
+   - Added always-on BLE option for faculty desk unit
+   - Improved BLE connection detection and reporting
+   - Created test script to verify BLE functionality
+   - Enhanced status reporting for more reliable faculty status updates
+
+4. **Admin Dashboard**:
    - Fixed CRUD operations for faculty and student management
    - Added proper resource cleanup to prevent memory leaks
    - Improved UI consistency and user experience
 
-4. **Database Management**:
+5. **Database Management**:
    - Added backup and restore functionality
    - Implemented proper error handling for database operations
    - Added default data creation for easier setup
@@ -498,7 +574,24 @@ The ConsultEase system has undergone significant improvements to enhance stabili
    - Improved UI element styling and layout
    - Enhanced touch interface usability
 
-2. **Error Handling**:
+2. **Transitions and Animations**:
+   - Added smooth transitions between screens
+   - Improved platform detection for transition effects
+   - Enhanced fade and slide animations
+   - Added tab highlighting for better visual cues
+
+3. **Consultation Panel Improvements**:
+   - Enhanced readability and user feedback
+   - Added auto-refresh for consultation history
+   - Improved tab change animations
+   - Better visual feedback for user actions
+
+4. **Dashboard Improvements**:
+   - Made the logout button smaller in the dashboard
+   - Improved faculty status display
+   - Enhanced overall layout and spacing
+
+5. **Error Handling**:
    - Added informative error messages
    - Implemented fallback mechanisms for error recovery
    - Improved logging for debugging

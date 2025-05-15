@@ -4,7 +4,7 @@
 
 ConsultEase is a comprehensive system designed to streamline student-faculty consultations. It consists of a Central System running on a Raspberry Pi with a touchscreen interface, and Faculty Desk Units installed at each faculty member's desk. The system uses RFID for student authentication, displays real-time faculty availability, and manages consultation requests efficiently.
 
-This manual provides instructions for students, faculty members, and administrators on how to use the ConsultEase system.
+This manual provides instructions for students, faculty members, and administrators on how to use the ConsultEase system. This version has been updated to reflect recent improvements to the system, including enhanced UI transitions, improved consultation panel, and updated BLE functionality.
 
 ## Quick Start Guide
 
@@ -78,11 +78,13 @@ To request a consultation with a faculty member:
 
 1. Locate the faculty member on the dashboard.
 2. Tap the "Request Consultation" button on their card (note: this button is only active if they are available).
-3. Fill in the consultation details:
+3. The improved consultation panel will open with a smooth transition animation.
+4. Fill in the consultation details:
    - **Course Code** (optional): Enter the relevant course code if applicable.
    - **Consultation Details**: Describe the purpose of your consultation.
-4. Tap "Submit Request" to send your request.
-5. You will receive a confirmation message when your request is successfully submitted.
+5. Tap "Submit Request" to send your request.
+6. You will receive a confirmation message when your request is successfully submitted.
+7. The system will automatically switch to the consultation history tab with a smooth transition.
 
 ### Checking Request Status
 
@@ -92,7 +94,13 @@ The system will notify the faculty member of your request. You will be notified 
 - The faculty member accepts your request.
 - The consultation is marked as completed.
 
-To check the status of your previous requests, you can view your request history from the dashboard by tapping on "My Requests" (if available).
+To check the status of your previous requests:
+1. Navigate to the consultation panel
+2. Select the "Consultation History" tab
+3. View a list of all your previous consultation requests
+4. The history automatically refreshes periodically to show the latest status
+5. You can manually refresh by switching tabs or clicking the refresh button
+6. For pending consultations, you can cancel them by clicking the "Cancel" button
 
 ---
 
@@ -125,6 +133,8 @@ Your status is automatically updated based on your presence:
 
 - **Available**: When the BLE beacon is detected near your desk
 - **Unavailable**: When the BLE beacon is not detected for more than 15 seconds
+
+Alternatively, if your Faculty Desk Unit is configured with the always-on BLE option, your status will always show as "Available" regardless of the BLE beacon's presence. This is useful for faculty members who want to be always available for consultations.
 
 Your status is displayed both on your Faculty Desk Unit and on the Central System for students to see.
 
@@ -275,6 +285,8 @@ As an administrator, you may need to perform system maintenance:
 - Check if the ESP32 is properly connected to the network
 - Restart the Faculty Desk Unit if necessary
 - Check the MQTT broker status on the server
+- If using the always-on BLE option, verify it's properly configured in the Faculty Desk Unit's config.h file
+- Run the BLE test script to verify functionality: `python scripts/test_ble_connection.py test`
 
 #### Central System Unresponsive
 - Wait a few moments for the system to respond
@@ -283,6 +295,8 @@ As an administrator, you may need to perform system maintenance:
 - Press F5 to toggle the on-screen keyboard if needed
 - The system may require a restart
 - Check system logs for any error messages
+- If transitions between screens are not working properly, try restarting the application
+- If the consultation panel is not refreshing, check the auto-refresh timer settings
 
 #### Faculty Desk Unit Display Issues
 - Check the power connection
@@ -377,6 +391,13 @@ The Central System requires the following software packages:
 - SQLAlchemy
 - evdev (for RFID reader)
 - bcrypt (for secure password hashing)
+- squeekboard (preferred on-screen keyboard)
+
+The Faculty Desk Unit requires the following libraries:
+- TFT_eSPI by Bodmer
+- PubSubClient by Nick O'Leary
+- ArduinoJson by Benoit Blanchon
+- NimBLE-Arduino by h2zero
 
 ### Security Features
 
@@ -438,4 +459,4 @@ For optimal performance:
 
 ---
 
-© 2023 ConsultEase System - All Rights Reserved
+© 2024 ConsultEase System - All Rights Reserved

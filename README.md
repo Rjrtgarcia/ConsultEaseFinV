@@ -8,14 +8,16 @@ A comprehensive system for enhanced student-faculty interaction, featuring RFID-
 - PyQt5 user interface for student interaction
 - RFID-based authentication
 - Real-time faculty availability display
-- Consultation request management
+- Consultation request management with improved UI
 - Secure admin interface
-- Touch-optimized UI with on-screen keyboard support
+- Touch-optimized UI with on-screen keyboard support (squeekboard preferred)
+- Smooth UI transitions and animations
 
 ### Faculty Desk Unit (ESP32)
 - 2.4" TFT Display for consultation requests
-- BLE-based presence detection
+- BLE-based presence detection (with always-on option)
 - MQTT communication with Central System
+- Real-time status updates
 
 ## Requirements
 
@@ -54,6 +56,8 @@ sudo chmod +x scripts/install_squeekboard.sh
 sudo ./scripts/install_squeekboard.sh
 ```
 
+Note: The system now prefers squeekboard over onboard for the on-screen keyboard functionality.
+
 4. Calibrate the touchscreen (if needed):
 ```bash
 sudo chmod +x scripts/calibrate_touch.sh
@@ -80,7 +84,18 @@ python central_system/main.py
 
 2. Configure TFT_eSPI for your display
 
-3. Upload the sketch to your ESP32
+3. Update the configuration in `faculty_desk_unit/config.h`:
+   - Set the faculty ID and name
+   - Configure WiFi credentials
+   - Set MQTT broker IP address
+   - Configure BLE settings (including always-on option)
+
+4. Upload the sketch to your ESP32
+
+5. Test the faculty desk unit using the provided test scripts:
+   ```bash
+   python scripts/test_ble_connection.py test
+   ```
 
 ## Development
 
@@ -92,24 +107,36 @@ consultease/
 │   ├── views/                # PyQt UI components
 │   ├── controllers/          # Application logic
 │   ├── services/             # External services (MQTT, RFID)
+│   ├── resources/            # UI resources (icons, stylesheets)
 │   └── utils/                # Utility functions
 ├── faculty_desk_unit/        # ESP32 firmware
+│   ├── faculty_desk_unit.ino # Main firmware file
+│   ├── config.h              # Configuration file
+│   └── ble_beacon/           # BLE beacon firmware
 ├── scripts/                  # Utility scripts
 │   ├── install_squeekboard.sh # Install on-screen keyboard
 │   ├── calibrate_touch.sh    # Touchscreen calibration utility
-│   └── enable_fullscreen.py  # Enable fullscreen for deployment
+│   ├── enable_fullscreen.py  # Enable fullscreen for deployment
+│   ├── test_ble_connection.py # Test BLE functionality
+│   └── test_ui_improvements.py # Test UI improvements
 ├── tests/                    # Test suite
 └── docs/                     # Documentation
+    ├── deployment_guide.md   # Comprehensive deployment guide
+    ├── quick_start_guide.md  # Quick start instructions
+    ├── user_manual.md        # User manual
+    └── recent_improvements.md # Documentation of recent changes
 ```
 
 ## Touchscreen Features
 
 ConsultEase includes several features to enhance usability on touchscreen devices:
 
-- **Auto-popup keyboard**: Virtual keyboard appears automatically when text fields receive focus
+- **Auto-popup keyboard**: Virtual keyboard (squeekboard) appears automatically when text fields receive focus
 - **Fullscreen mode**: Optimized for touchscreen deployment with full screen utilization
 - **Touch calibration**: Tools to ensure accurate touch input recognition
 - **Touch-friendly UI**: Larger buttons and input elements optimized for touch interaction
+- **Smooth transitions**: Enhanced UI transitions between screens for better user experience
+- **Improved consultation panel**: Better readability and user feedback in the consultation interface
 
 See the user manual and deployment guide in the `docs/` directory for detailed instructions on touchscreen setup and optimization.
 
@@ -157,4 +184,4 @@ python scripts/debug_rfid.py test <device_number>
 For the target RFID reader with VID:ffff PID:0035, the system should auto-detect it during startup.
 
 ## License
-[MIT](LICENSE) 
+[MIT](LICENSE)
