@@ -26,8 +26,8 @@ char mqtt_topic_status[50];
 char mqtt_client_id[50];
 
 // BLE UUIDs
-#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define SERVICE_UUID        "91BAD35B-F3CB-4FC1-8603-88D5137892A6"
+#define CHARACTERISTIC_UUID "D9473AA3-E6F4-424B-B6E7-A5F94FDDA285"
 
 // TFT Display pins for ST7789
 #define TFT_CS    5
