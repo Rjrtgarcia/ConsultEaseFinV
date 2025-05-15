@@ -377,28 +377,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.println(message);
 
   // Process the message based on format
-  String processedMessage = processMessage(message);
-
-  // Extract consultation ID if this is a JSON message
-  int consultationId = -1;
-  if (message.startsWith("{")) {
-    // Try to extract the consultation ID
-    int idStart = message.indexOf("\"id\":");
-    if (idStart > 0) {
-      idStart += 5; // Length of "id":
-      int idEnd = message.indexOf(",", idStart);
-      if (idEnd > idStart) {
-        String idStr = message.substring(idStart, idEnd);
-        idStr.trim();
-        consultationId = idStr.toInt();
-        Serial.print("Extracted consultation ID: ");
-        Serial.println(consultationId);
-      }
-    }
-  }
+  message = processMessage(message);
 
   // Display the message on TFT with visual notification
-  displayMessage(processedMessage);
+  displayMessage(message);
   displaySystemStatus("New message received");
 
   // Flash the screen briefly to draw attention to the new message
@@ -415,28 +397,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
   // Also forward to connected BLE device if any
   if (deviceConnected) {
-    pCharacteristic->setValue(processedMessage.c_str());
+    pCharacteristic->setValue(message.c_str());
     pCharacteristic->notify();
-  }
-
-  // Send acknowledgment for consultation request if we have a valid ID
-  if (consultationId > 0) {
-    // Create acknowledgment message
-    char ackTopic[100];
-    sprintf(ackTopic, "consultease/faculty/%d/acknowledgment", FACULTY_ID);
-
-    // Create JSON payload
-    char ackPayload[200];
-    sprintf(ackPayload, "{\"consultation_id\":%d,\"status\":\"received\",\"faculty_id\":%d}",
-            consultationId, FACULTY_ID);
-
-    // Publish acknowledgment
-    mqttClient.publish(ackTopic, ackPayload);
-    Serial.print("Sent acknowledgment for consultation ID: ");
-    Serial.println(consultationId);
-
-    // Also publish to a more general topic for backward compatibility
-    mqttClient.publish("consultease/acknowledgments", ackPayload);
   }
 }
 

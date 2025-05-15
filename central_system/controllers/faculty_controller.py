@@ -81,7 +81,6 @@ class FacultyController:
         """
         faculty_id = None
         status = None
-        is_ble_update = False  # Flag to indicate if this is a BLE keychain update
 
         # Handle different topic formats
         if topic == "professor/status":
@@ -90,7 +89,6 @@ class FacultyController:
             if isinstance(data, str):
                 if data == "keychain_connected":
                     status = True
-                    is_ble_update = True
                     # Use faculty ID from the client ID (DeskUnit_Jeysibn)
                     # Find faculty with name "Jeysibn"
                     db = get_db()
@@ -103,7 +101,6 @@ class FacultyController:
                         return
                 elif data == "keychain_disconnected":
                     status = False
-                    is_ble_update = True
                     # Use faculty ID from the client ID (DeskUnit_Jeysibn)
                     # Find faculty with name "Jeysibn"
                     db = get_db()
@@ -147,25 +144,10 @@ class FacultyController:
                 # Check if this is a BLE beacon status update
                 if 'keychain_connected' in data:
                     status = True
-                    is_ble_update = True
                     logger.info(f"BLE beacon connected for faculty {faculty_id}")
                 elif 'keychain_disconnected' in data:
                     status = False
-                    is_ble_update = True
                     logger.info(f"BLE beacon disconnected for faculty {faculty_id}")
-            elif isinstance(data, str):
-                # Check if this is a string message (keychain_connected or keychain_disconnected)
-                if data == "keychain_connected":
-                    status = True
-                    is_ble_update = True
-                    logger.info(f"BLE beacon connected for faculty {faculty_id}")
-                elif data == "keychain_disconnected":
-                    status = False
-                    is_ble_update = True
-                    logger.info(f"BLE beacon disconnected for faculty {faculty_id}")
-                else:
-                    logger.error(f"Invalid data format for topic {topic}: {data}")
-                    return
             else:
                 logger.error(f"Invalid data format for topic {topic}: {data}")
                 return
@@ -175,10 +157,10 @@ class FacultyController:
             logger.error(f"Could not determine faculty ID or status from topic {topic} and data {data}")
             return
 
-        logger.info(f"Received status update for faculty {faculty_id}: {status}, BLE update: {is_ble_update}")
+        logger.info(f"Received status update for faculty {faculty_id}: {status}")
 
         # Update faculty status in database
-        faculty = self.update_faculty_status(faculty_id, status, is_ble_update)
+        faculty = self.update_faculty_status(faculty_id, status)
 
         if faculty:
             # Notify callbacks
@@ -190,22 +172,20 @@ class FacultyController:
                     'type': 'faculty_status',
                     'faculty_id': faculty.id,
                     'faculty_name': faculty.name,
-                    'status': faculty.status,  # Use the actual status from the faculty object
-                    'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None,
-                    'ble_update': is_ble_update  # Include whether this was a BLE update
+                    'status': status,
+                    'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
                 }
                 self.mqtt_service.publish('consultease/system/notifications', notification)
             except Exception as e:
                 logger.error(f"Error publishing faculty status notification: {str(e)}")
 
-    def update_faculty_status(self, faculty_id, status, is_ble_update=False):
+    def update_faculty_status(self, faculty_id, status):
         """
         Update faculty status in the database.
 
         Args:
             faculty_id (int): Faculty ID
             status (bool): New status (True = Available, False = Unavailable)
-            is_ble_update (bool): Whether this is a BLE keychain update
 
         Returns:
             Faculty: Updated faculty object or None if not found
@@ -218,33 +198,21 @@ class FacultyController:
                 logger.error(f"Faculty not found: {faculty_id}")
                 return None
 
-            # If this is a BLE update, we need to handle it differently
-            if is_ble_update:
-                # BLE updates should override always_available setting
-                # This ensures that faculty availability accurately reflects their physical presence
-                if not status:  # If BLE keychain is disconnected
-                    # Set faculty status to unavailable regardless of always_available setting
-                    faculty.status = False
-                    logger.info(f"BLE keychain disconnected for faculty {faculty.name} (ID: {faculty.id}), setting status to unavailable")
-                else:  # If BLE keychain is connected
-                    faculty.status = True
-                    logger.info(f"BLE keychain connected for faculty {faculty.name} (ID: {faculty.id}), setting status to available")
-            else:
-                # For non-BLE updates, respect the always_available setting
-                if faculty.always_available and not status:
-                    logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) is set to always available, ignoring unavailable status update")
-                    # Still update last_seen timestamp
-                    faculty.last_seen = datetime.datetime.now()
-                    db.commit()
-                    return faculty
+            # If faculty is set to always available, don't change status to unavailable
+            if faculty.always_available and not status:
+                logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) is set to always available, ignoring unavailable status update")
+                # Still update last_seen timestamp
+                faculty.last_seen = datetime.datetime.now()
+                db.commit()
+                return faculty
 
-                # Otherwise, update status normally
-                faculty.status = status
-                logger.info(f"Updated status for faculty {faculty.name} (ID: {faculty.id}): {status}")
-
-            # Update last_seen timestamp
+            # Otherwise, update status normally
+            faculty.status = status
             faculty.last_seen = datetime.datetime.now()
+
             db.commit()
+
+            logger.info(f"Updated status for faculty {faculty.name} (ID: {faculty.id}): {status}")
 
             return faculty
         except Exception as e:
