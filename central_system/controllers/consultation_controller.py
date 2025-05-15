@@ -29,6 +29,18 @@ class ConsultationController:
         if not self.mqtt_service.is_connected:
             self.mqtt_service.connect()
 
+        # Subscribe to acknowledgment topics
+        self.mqtt_service.register_topic_handler(
+            "consultease/faculty/+/acknowledgment",
+            self.handle_consultation_acknowledgment
+        )
+
+        # Also subscribe to the general acknowledgment topic for backward compatibility
+        self.mqtt_service.register_topic_handler(
+            "consultease/acknowledgments",
+            self.handle_consultation_acknowledgment
+        )
+
     def stop(self):
         """
         Stop the consultation controller.
@@ -304,6 +316,59 @@ class ConsultationController:
             Consultation: Updated consultation object or None if error
         """
         return self.update_consultation_status(consultation_id, ConsultationStatus.CANCELLED)
+
+    def handle_consultation_acknowledgment(self, topic, data):
+        """
+        Handle consultation acknowledgment from faculty desk unit.
+
+        Args:
+            topic (str): MQTT topic
+            data (dict or str): Message data
+        """
+        try:
+            logger.info(f"Received consultation acknowledgment on topic {topic}: {data}")
+
+            # Extract consultation ID and status from data
+            consultation_id = None
+            status = None
+
+            if isinstance(data, dict):
+                consultation_id = data.get('consultation_id')
+                status_str = data.get('status')
+
+                if status_str == "received":
+                    status = ConsultationStatus.ACCEPTED
+                elif status_str == "completed":
+                    status = ConsultationStatus.COMPLETED
+                elif status_str == "cancelled":
+                    status = ConsultationStatus.CANCELLED
+            else:
+                # Try to parse as JSON if it's a string
+                try:
+                    import json
+                    json_data = json.loads(data)
+                    consultation_id = json_data.get('consultation_id')
+                    status_str = json_data.get('status')
+
+                    if status_str == "received":
+                        status = ConsultationStatus.ACCEPTED
+                    elif status_str == "completed":
+                        status = ConsultationStatus.COMPLETED
+                    elif status_str == "cancelled":
+                        status = ConsultationStatus.CANCELLED
+                except Exception as e:
+                    logger.error(f"Failed to parse acknowledgment data: {data}. Error: {str(e)}")
+                    return
+
+            if consultation_id is None or status is None:
+                logger.error(f"Invalid acknowledgment data: {data}")
+                return
+
+            # Update consultation status
+            logger.info(f"Updating consultation {consultation_id} status to {status}")
+            self.update_consultation_status(consultation_id, status)
+        except Exception as e:
+            logger.error(f"Error handling consultation acknowledgment: {str(e)}")
 
     def get_consultations(self, student_id=None, faculty_id=None, status=None):
         """
