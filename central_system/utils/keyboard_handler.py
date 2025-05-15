@@ -158,21 +158,83 @@ touch-feedback-size=small
 
         elif self.keyboard_type == 'squeekboard':
             try:
-                # Check if squeekboard service is running
+                # Check if squeekboard service exists and is running
+                check_exists_cmd = "systemctl --user list-unit-files | grep squeekboard.service"
+                exists_result = subprocess.run(check_exists_cmd, shell=True, capture_output=True, text=True)
+
+                if exists_result.returncode != 0:
+                    logger.warning("Squeekboard service unit file not found. Creating a user service file...")
+                    # Create the service file directory if it doesn't exist
+                    service_dir = os.path.expanduser("~/.config/systemd/user")
+                    os.makedirs(service_dir, exist_ok=True)
+
+                    # Create the squeekboard service file
+                    service_path = os.path.join(service_dir, "squeekboard.service")
+                    with open(service_path, 'w') as f:
+                        f.write("""[Unit]
+Description=On-screen keyboard for Wayland
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/squeekboard
+Restart=on-failure
+Environment=SQUEEKBOARD_FORCE=1
+Environment=GDK_BACKEND=wayland,x11
+Environment=QT_QPA_PLATFORM=wayland;xcb
+
+[Install]
+WantedBy=graphical-session.target
+""")
+                    logger.info(f"Created squeekboard service file at {service_path}")
+
+                    # Reload systemd user daemon
+                    reload_cmd = "systemctl --user daemon-reload"
+                    subprocess.run(reload_cmd, shell=True)
+                    logger.info("Reloaded systemd user daemon")
+
+                # Now check if the service is running
                 check_cmd = "systemctl --user is-active squeekboard.service"
                 result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
 
-                if "inactive" in result.stdout or "failed" in result.stdout:
+                if "inactive" in result.stdout or "failed" in result.stdout or "not-found" in result.stdout:
                     logger.info("Squeekboard service not running, attempting to start it...")
                     start_cmd = "systemctl --user start squeekboard.service"
-                    subprocess.run(start_cmd, shell=True)
+                    start_result = subprocess.run(start_cmd, shell=True, capture_output=True, text=True)
 
-                    # Check if it's now running
-                    result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
-                    if "active" in result.stdout:
-                        logger.info("Squeekboard service started successfully")
+                    if start_result.returncode != 0:
+                        logger.warning(f"Failed to start squeekboard service: {start_result.stderr}")
+                        logger.info("Falling back to direct process launch...")
+                        # Launch squeekboard directly as a fallback
+                        try:
+                            subprocess.Popen(
+                                ['squeekboard'],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                env=dict(os.environ, SQUEEKBOARD_FORCE="1"),
+                                start_new_session=True
+                            )
+                            logger.info("Started squeekboard directly as fallback")
+                        except Exception as e:
+                            logger.error(f"Failed to start squeekboard directly: {e}")
                     else:
-                        logger.warning("Failed to start squeekboard service, keyboard may not appear")
+                        # Check if it's now running
+                        result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+                        if "active" in result.stdout:
+                            logger.info("Squeekboard service started successfully")
+                        else:
+                            logger.warning("Failed to start squeekboard service, falling back to direct launch")
+                            # Launch squeekboard directly as a fallback
+                            try:
+                                subprocess.Popen(
+                                    ['squeekboard'],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL,
+                                    env=dict(os.environ, SQUEEKBOARD_FORCE="1"),
+                                    start_new_session=True
+                                )
+                                logger.info("Started squeekboard directly as fallback")
+                            except Exception as e:
+                                logger.error(f"Failed to start squeekboard directly: {e}")
                 else:
                     logger.info("Squeekboard service is already running")
 
@@ -620,19 +682,48 @@ touch-feedback-size=small
             try:
                 # First, ensure squeekboard service is running
                 try:
-                    # Check if squeekboard service is running
-                    check_cmd = "systemctl --user is-active squeekboard.service"
-                    result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+                    # Check if squeekboard service exists
+                    check_exists_cmd = "systemctl --user list-unit-files | grep squeekboard.service"
+                    exists_result = subprocess.run(check_exists_cmd, shell=True, capture_output=True, text=True)
 
-                    if "inactive" in result.stdout or "failed" in result.stdout:
-                        logger.info("Squeekboard service not running, attempting to start it...")
-                        start_cmd = "systemctl --user start squeekboard.service"
-                        subprocess.run(start_cmd, shell=True)
+                    if exists_result.returncode != 0:
+                        logger.debug("Squeekboard service unit file not found, skipping service check")
+                        # Skip service check and rely on direct process launch
+                    else:
+                        # Check if squeekboard service is running
+                        check_cmd = "systemctl --user is-active squeekboard.service"
+                        result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
 
+                        if "inactive" in result.stdout or "failed" in result.stdout:
+                            logger.info("Squeekboard service not running, attempting to start it...")
+                            start_cmd = "systemctl --user start squeekboard.service"
+                            subprocess.run(start_cmd, shell=True)
+
+                            # Give it a moment to start
+                            time.sleep(0.5)
+                except Exception as e:
+                    logger.debug(f"Error checking squeekboard service: {e}")
+
+                # Always try to launch squeekboard directly as a fallback
+                try:
+                    # Check if squeekboard is already running
+                    check_process_cmd = "pgrep -f squeekboard"
+                    process_result = subprocess.run(check_process_cmd, shell=True, capture_output=True, text=True)
+
+                    if process_result.returncode != 0:
+                        # Launch squeekboard directly
+                        subprocess.Popen(
+                            ['squeekboard'],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            env=dict(os.environ, SQUEEKBOARD_FORCE="1"),
+                            start_new_session=True
+                        )
+                        logger.debug("Started squeekboard process directly")
                         # Give it a moment to start
                         time.sleep(0.5)
                 except Exception as e:
-                    logger.debug(f"Error checking squeekboard service: {e}")
+                    logger.debug(f"Error launching squeekboard directly: {e}")
 
                 # Try to use dbus-send to force the keyboard
                 cmd = [
