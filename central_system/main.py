@@ -261,19 +261,30 @@ class ConsultEaseApp:
         """
         Show the dashboard window.
         """
+        # Store the current student
         self.current_student = student
 
+        # Log the student information
+        if student:
+            logger.info(f"Showing dashboard for student: ID={student.id}, Name={student.name}, RFID={student.rfid_uid}")
+        else:
+            logger.warning("Showing dashboard without student information")
+
         if self.dashboard_window is None:
+            # Create a new dashboard window if one doesn't exist
+            logger.info("Creating new dashboard window")
             self.dashboard_window = DashboardWindow(student)
             self.dashboard_window.change_window.connect(self.handle_window_change)
             self.dashboard_window.consultation_requested.connect(self.handle_consultation_request)
         else:
-            # Update student info if needed
-            self.dashboard_window.student = student
+            # Update the existing dashboard with the new student information
+            logger.info("Updating existing dashboard window with new student information")
+            self.dashboard_window.update_student(student)
 
-        # Populate faculty grid
-        faculties = self.faculty_controller.get_all_faculty()
-        self.dashboard_window.populate_faculty_grid(faculties)
+        # Populate faculty grid (this is now handled in update_student if it's an existing dashboard)
+        if self.dashboard_window is not None and hasattr(self.dashboard_window, 'student') and self.dashboard_window.student is None:
+            faculties = self.faculty_controller.get_all_faculty()
+            self.dashboard_window.populate_faculty_grid(faculties)
 
         # Determine which window is currently visible
         current_window = None
@@ -305,8 +316,8 @@ class ConsultEaseApp:
             self.dashboard_window.show()
             self.dashboard_window.showFullScreen()  # Force fullscreen to ensure it takes effect
 
-        # Log that we've shown the dashboard
-        logger.info(f"Showing dashboard for student: {student.name if student else 'Unknown'}")
+        # Log that the dashboard is now visible
+        logger.info("Dashboard window is now visible")
 
     def show_admin_login_window(self):
         """

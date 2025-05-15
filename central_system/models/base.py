@@ -1,9 +1,15 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
 import os
 import urllib.parse
 import getpass
+import time
+import logging
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # Database connection settings
 DB_TYPE = os.environ.get('DB_TYPE', 'sqlite')  # Default to SQLite for development
@@ -43,41 +49,99 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # Create base class for models
 Base = declarative_base()
 
-def get_db(force_new=False):
+def get_db(force_new=False, max_retries=3):
     """
-    Get database session.
+    Get database session with connection validation and retry logic.
 
     Args:
         force_new (bool): If True, create a new session even if one exists
+        max_retries (int): Maximum number of connection retry attempts
     """
-    # Create a new session
-    db = SessionLocal()
+    retry_count = 0
+    last_error = None
 
-    # If force_new is True, ensure we're getting fresh data
-    if force_new:
-        # Expire all objects in the session to force a refresh from the database
-        db.expire_all()
+    while retry_count <= max_retries:
+        try:
+            # Create a new session
+            db = SessionLocal()
 
-        # You can also use this to clear the session entirely
-        # db.close()
-        # db = SessionLocal()
+            # Test the connection by executing a simple query
+            # This will raise an exception if the connection is invalid
+            db.execute("SELECT 1")
 
-    try:
-        return db
-    except Exception as e:
-        db.close()
-        raise e
+            # If force_new is True, ensure we're getting fresh data
+            if force_new:
+                # Expire all objects in the session to force a refresh from the database
+                db.expire_all()
+
+            logger.debug("Database connection established successfully")
+            return db
+
+        except (SQLAlchemyError, OperationalError) as e:
+            last_error = e
+            retry_count += 1
+
+            if retry_count <= max_retries:
+                logger.warning(f"Database connection attempt {retry_count} failed: {str(e)}. Retrying...")
+                # Close the failed session if it exists
+                try:
+                    if 'db' in locals():
+                        db.close()
+                except Exception:
+                    pass
+
+                # Wait before retrying (exponential backoff)
+                time.sleep(0.5 * retry_count)
+            else:
+                logger.error(f"Failed to connect to database after {max_retries} attempts: {str(e)}")
+                # Close the failed session if it exists
+                try:
+                    if 'db' in locals():
+                        db.close()
+                except Exception:
+                    pass
+                raise
+
+        except Exception as e:
+            logger.error(f"Unexpected error connecting to database: {str(e)}")
+            # Close the failed session if it exists
+            try:
+                if 'db' in locals():
+                    db.close()
+            except Exception:
+                pass
+            raise
 
 def init_db():
     """
     Initialize database tables and create default data if needed.
     """
-    # Create tables
-    Base.metadata.create_all(bind=engine)
+    logger.info("Initializing database...")
+
+    # Try to create tables with retry logic
+    max_retries = 3
+    retry_count = 0
+
+    while retry_count <= max_retries:
+        try:
+            # Create tables
+            Base.metadata.create_all(bind=engine)
+            logger.info("Database tables created successfully")
+            break
+        except Exception as e:
+            retry_count += 1
+            if retry_count <= max_retries:
+                logger.warning(f"Failed to create database tables (attempt {retry_count}): {str(e)}. Retrying...")
+                time.sleep(1)
+            else:
+                logger.error(f"Failed to create database tables after {max_retries} attempts: {str(e)}")
+                raise
 
     # Check if we need to create default data
-    db = SessionLocal()
     try:
+        # Get a database session with retry logic
+        db = get_db(force_new=True)
+
         # Import models here to avoid circular imports
         from .admin import Admin
         from .faculty import Faculty
@@ -149,8 +213,28 @@ def init_db():
             print("Created sample student data")
 
         db.commit()
+        logger.info("Database initialization completed successfully")
     except Exception as e:
-        print(f"Error creating default data: {str(e)}")
-        db.rollback()
+        logger.error(f"Error creating default data: {str(e)}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
     finally:
-        db.close()
+        try:
+            db.close()
+        except Exception:
+            pass
+
+    # Verify database connection is working properly
+    try:
+        verify_db = get_db(force_new=True)
+        # Run a simple query to verify connection
+        result = verify_db.execute("SELECT 1").fetchone()
+        if result and result[0] == 1:
+            logger.info("Database connection verified successfully")
+        else:
+            logger.warning("Database connection verification returned unexpected result")
+        verify_db.close()
+    except Exception as e:
+        logger.error(f"Database connection verification failed: {str(e)}")
