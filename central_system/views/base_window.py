@@ -1,9 +1,12 @@
-from PyQt5.QtWidgets import QMainWindow, QDesktopWidget, QShortcut, QPushButton, QStatusBar, QApplication
-from PyQt5.QtCore import Qt, pyqtSignal, QSize
+from PyQt5.QtWidgets import (QMainWindow, QDesktopWidget, QShortcut, QPushButton,
+                             QStatusBar, QApplication, QLineEdit, QTextEdit,
+                             QPlainTextEdit, QComboBox)
+from PyQt5.QtCore import Qt, pyqtSignal, QSize, QTimer, QEvent
 from PyQt5.QtGui import QKeySequence, QIcon
 import logging
 import sys
 import os
+import subprocess
 
 # Add parent directory to path to help with imports
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
@@ -376,6 +379,12 @@ class BaseWindow(QMainWindow):
         # Set keyboard properties on all input fields
         self._set_keyboard_properties(self)
 
+        # Install event filter to catch dynamically created widgets if not already installed
+        if not hasattr(self, '_keyboard_event_filter_installed'):
+            self.installEventFilter(self)
+            self._keyboard_event_filter_installed = True
+            logger.info(f"Installed keyboard event filter for {self.__class__.__name__}")
+
         # If we have a keyboard handler, ensure it's properly initialized
         if keyboard_handler:
             # Update button text based on keyboard visibility
@@ -386,8 +395,84 @@ class BaseWindow(QMainWindow):
                 if hasattr(self, 'keyboard_toggle_button'):
                     self.keyboard_toggle_button.setText("⌨ Show Keyboard")
 
+            # Force show keyboard if there's a focused input field
+            focused_widget = app.focusWidget()
+            if focused_widget and isinstance(focused_widget, (QLineEdit, QTextEdit, QPlainTextEdit, QComboBox)):
+                logger.info(f"Input field already focused, showing keyboard: {focused_widget.__class__.__name__}")
+                QTimer.singleShot(100, keyboard_handler.show_keyboard)
+                QTimer.singleShot(500, keyboard_handler.show_keyboard)  # Try again after a delay
+
         # Log keyboard initialization
         logger.info(f"Keyboard initialized for window: {self.__class__.__name__}")
+
+    def eventFilter(self, obj, event):
+        """
+        Event filter to catch child widget creation and focus events.
+        This ensures that dynamically created input fields also trigger the keyboard.
+        """
+        # Check for child added events
+        if event.type() == QEvent.ChildAdded:
+            # Get the child widget
+            child = event.child()
+
+            # Check if it's an input field
+            if isinstance(child, (QLineEdit, QTextEdit, QPlainTextEdit, QComboBox)):
+                # Initialize keyboard for this new widget
+                QTimer.singleShot(100, lambda: self._initialize_input_field(child))
+
+        # Always return False to allow the event to be processed by other filters
+        return False
+
+    def _initialize_input_field(self, widget):
+        """
+        Initialize keyboard handling for a single input field.
+        """
+        # Set property to indicate keyboard should appear on focus
+        widget.setProperty("keyboardOnFocus", True)
+
+        # Set object name if not already set
+        if not widget.objectName():
+            widget.setObjectName(f"{widget.__class__.__name__}_{id(widget)}")
+
+        # Log the input field
+        logger.debug(f"Initializing dynamic input field: {widget.objectName()} in {self.__class__.__name__}")
+
+        # Connect focus events if not already connected
+        if not hasattr(widget, '_keyboard_focus_connected'):
+            # Store original focusInEvent method
+            original_focus_in = widget.focusInEvent
+
+            # Create new focusInEvent method that shows keyboard
+            def create_focus_handler(original_handler, input_widget):
+                def new_focus_in(event):
+                    # Call original method
+                    original_handler(event)
+
+                    # Log the focus event
+                    logger.debug(f"Focus gained on dynamic {input_widget.objectName()} in {self.__class__.__name__}")
+
+                    # Show keyboard with multiple methods for redundancy
+                    app = QApplication.instance()
+
+                    # Method 1: Use keyboard handler
+                    if app and hasattr(app, 'keyboard_handler'):
+                        logger.debug(f"Showing keyboard via keyboard_handler for dynamic {input_widget.objectName()}")
+                        app.keyboard_handler.show_keyboard()
+                        QTimer.singleShot(100, app.keyboard_handler.show_keyboard)
+
+                    # Method 2: Use direct keyboard integration
+                    if app and hasattr(app, 'direct_keyboard'):
+                        logger.debug(f"Showing keyboard via direct_keyboard for dynamic {input_widget.objectName()}")
+                        app.direct_keyboard.show_keyboard()
+
+                return new_focus_in
+
+            # Replace focusInEvent method with a closure
+            widget.focusInEvent = create_focus_handler(original_focus_in, widget)
+
+            # Mark as connected
+            widget._keyboard_focus_connected = True
+            logger.debug(f"Connected focus events for dynamic {widget.objectName()}")
 
     def _set_keyboard_properties(self, widget):
         """
@@ -397,34 +482,71 @@ class BaseWindow(QMainWindow):
         Args:
             widget: The widget to process (recursively processes all children)
         """
-        # Process all child widgets
-        for child in widget.findChildren(QApplication.focusWidget().__class__):
-            # Check if this is an input widget that should trigger the keyboard
-            if child.__class__.__name__ in ['QLineEdit', 'QTextEdit', 'QPlainTextEdit']:
-                # Set property to show keyboard on focus
-                child.setProperty("keyboardOnFocus", True)
-                logger.debug(f"Set keyboardOnFocus property on {child.__class__.__name__}")
+        # Find all input fields in the widget
+        input_fields = widget.findChildren(QLineEdit) + \
+                      widget.findChildren(QTextEdit) + \
+                      widget.findChildren(QPlainTextEdit) + \
+                      widget.findChildren(QComboBox)
 
-                # Connect focus events if not already connected
-                if not hasattr(child, '_keyboard_focus_connected'):
-                    # Store original focusInEvent method
-                    original_focus_in = child.focusInEvent
+        logger.info(f"Found {len(input_fields)} input fields in {widget.__class__.__name__}")
 
-                    # Create new focusInEvent method that shows keyboard
+        # Process each input field
+        for child in input_fields:
+            # Set property to show keyboard on focus
+            child.setProperty("keyboardOnFocus", True)
+
+            # Set object name if not already set (helps with debugging)
+            if not child.objectName():
+                child.setObjectName(f"{child.__class__.__name__}_{id(child)}")
+
+            logger.debug(f"Set keyboardOnFocus property on {child.objectName()}")
+
+            # Connect focus events if not already connected
+            if not hasattr(child, '_keyboard_focus_connected'):
+                # Store original focusInEvent method
+                original_focus_in = child.focusInEvent
+
+                # Create new focusInEvent method that shows keyboard
+                def create_focus_handler(original_handler, input_widget):
                     def new_focus_in(event):
                         # Call original method
-                        original_focus_in(event)
+                        original_handler(event)
 
-                        # Show keyboard
+                        # Log the focus event
+                        logger.debug(f"Focus gained on {input_widget.objectName()} in {self.__class__.__name__}")
+
+                        # Show keyboard with multiple methods for redundancy
                         app = QApplication.instance()
+
+                        # Method 1: Use keyboard handler
                         if app and hasattr(app, 'keyboard_handler'):
+                            logger.debug(f"Showing keyboard via keyboard_handler for {input_widget.objectName()}")
                             app.keyboard_handler.show_keyboard()
-                        elif app and hasattr(app, 'direct_keyboard'):
+                            # Try again after a delay to ensure it appears
+                            QTimer.singleShot(100, app.keyboard_handler.show_keyboard)
+
+                        # Method 2: Use direct keyboard integration
+                        if app and hasattr(app, 'direct_keyboard'):
+                            logger.debug(f"Showing keyboard via direct_keyboard for {input_widget.objectName()}")
                             app.direct_keyboard.show_keyboard()
 
-                    # Replace focusInEvent method
-                    child.focusInEvent = new_focus_in
+                        # Method 3: Try keyboard script directly
+                        try:
+                            home_dir = os.path.expanduser("~")
+                            script_path = os.path.join(home_dir, "keyboard-show.sh")
+                            if os.path.exists(script_path):
+                                logger.debug(f"Showing keyboard via script for {input_widget.objectName()}")
+                                QTimer.singleShot(200, lambda: subprocess.Popen([script_path],
+                                                                            stdout=subprocess.DEVNULL,
+                                                                            stderr=subprocess.DEVNULL))
+                        except Exception as e:
+                            logger.error(f"Error with keyboard script: {e}")
 
-                    # Mark as connected
-                    child._keyboard_focus_connected = True
-                    logger.debug(f"Connected focus events for {child.__class__.__name__}")
+                    return new_focus_in
+
+                # Replace focusInEvent method with a closure that captures the original handler and widget
+                child.focusInEvent = create_focus_handler(original_focus_in, child)
+
+                # Mark as connected
+                child._keyboard_focus_connected = True
+                logger.debug(f"Connected focus events for {child.objectName()}")

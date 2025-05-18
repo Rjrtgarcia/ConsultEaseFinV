@@ -46,6 +46,8 @@ from central_system.utils import (
     get_keyboard_manager,
     install_keyboard_manager
 )
+# Import direct keyboard integration
+from central_system.utils.direct_keyboard import get_direct_keyboard
 # Import theme system
 from central_system.utils.theme import ConsultEaseTheme
 # Import icons module separately to avoid early QPixmap creation
@@ -101,6 +103,14 @@ class ConsultEaseApp:
         except Exception as e:
             logger.error(f"Failed to initialize keyboard manager: {e}")
             self.keyboard_handler = None
+
+        # Initialize direct keyboard integration as a fallback
+        try:
+            self.direct_keyboard = get_direct_keyboard()
+            logger.info(f"Initialized direct keyboard integration with {self.direct_keyboard.keyboard_type} keyboard")
+        except Exception as e:
+            logger.error(f"Failed to initialize direct keyboard integration: {e}")
+            self.direct_keyboard = None
 
         # Initialize database
         init_db()

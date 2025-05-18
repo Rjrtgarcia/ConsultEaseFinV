@@ -46,7 +46,7 @@ detect_desktop_environment() {
 install_keyboard() {
     local keyboard_type=$1
     local fallback=$2
-    
+
     echo "Attempting to install $keyboard_type..."
     if sudo apt update && sudo apt install -y $keyboard_type; then
         echo "✓ $keyboard_type installed successfully."
@@ -71,7 +71,7 @@ install_keyboard() {
 # Function to configure environment for squeekboard
 configure_squeekboard() {
     echo "Configuring environment for squeekboard..."
-    
+
     # Set environment variables
     mkdir -p ~/.config/environment.d/
     cat > ~/.config/environment.d/consultease-keyboard.conf << EOF
@@ -86,7 +86,7 @@ CLUTTER_IM_MODULE=wayland
 # Disable onboard
 ONBOARD_DISABLE=1
 EOF
-    
+
     # Add to .bashrc for immediate effect
     if ! grep -q "CONSULTEASE_KEYBOARD=squeekboard" ~/.bashrc; then
         echo "Adding environment variables to .bashrc..."
@@ -104,14 +104,14 @@ export CLUTTER_IM_MODULE=wayland
 export ONBOARD_DISABLE=1
 EOF
     fi
-    
+
     echo "✓ Environment configured for squeekboard."
 }
 
 # Function to configure environment for onboard
 configure_onboard() {
     echo "Configuring environment for onboard..."
-    
+
     # Set environment variables
     mkdir -p ~/.config/environment.d/
     cat > ~/.config/environment.d/consultease-keyboard.conf << EOF
@@ -124,7 +124,7 @@ CONSULTEASE_KEYBOARD=onboard
 # Disable squeekboard
 SQUEEKBOARD_DISABLE=1
 EOF
-    
+
     # Add to .bashrc for immediate effect
     if ! grep -q "CONSULTEASE_KEYBOARD=onboard" ~/.bashrc; then
         echo "Adding environment variables to .bashrc..."
@@ -140,10 +140,10 @@ export CONSULTEASE_KEYBOARD=onboard
 export SQUEEKBOARD_DISABLE=1
 EOF
     fi
-    
+
     # Create onboard configuration directory if it doesn't exist
     mkdir -p ~/.config/onboard
-    
+
     # Create onboard configuration file with touch-friendly settings
     cat > ~/.config/onboard/onboard.conf << EOF
 [main]
@@ -163,16 +163,16 @@ enable-touch-input=true
 touch-feedback-enabled=true
 touch-feedback-size=small
 EOF
-    
+
     echo "✓ Environment configured for onboard."
 }
 
 # Function to create keyboard toggle scripts
 create_keyboard_scripts() {
     local keyboard_type=$1
-    
+
     echo "Creating keyboard toggle scripts..."
-    
+
     # Create keyboard toggle script
     cat > ~/keyboard-toggle.sh << EOF
 #!/bin/bash
@@ -206,19 +206,46 @@ elif [ "$keyboard_type" = "onboard" ]; then
 fi
 EOF
     chmod +x ~/keyboard-toggle.sh
-    
+
     # Create keyboard show script
     cat > ~/keyboard-show.sh << EOF
 #!/bin/bash
 # Force show $keyboard_type keyboard
 
 if [ "$keyboard_type" = "squeekboard" ]; then
-    # Show squeekboard using DBus
+    # Try multiple methods to ensure squeekboard is shown
+
+    # First ensure squeekboard is running
+    if ! pgrep -f squeekboard > /dev/null; then
+        echo "Squeekboard not running, starting it..."
+        # Set up environment variables
+        export SQUEEKBOARD_FORCE=1
+        export GDK_BACKEND=wayland,x11
+        export QT_QPA_PLATFORM=wayland;xcb
+
+        # Start squeekboard
+        squeekboard &
+        sleep 0.5
+    fi
+
+    # Method 1: Standard DBus call
     if command -v dbus-send &> /dev/null; then
         dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
-        echo "Squeekboard shown"
+        echo "Squeekboard shown via standard DBus call"
     else
-        echo "DBus not available, cannot show squeekboard"
+        echo "DBus not available, cannot show squeekboard via standard method"
+    fi
+
+    # Method 2: Try with session bus explicitly
+    if command -v dbus-send &> /dev/null; then
+        dbus-send --session --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
+        echo "Squeekboard shown via session DBus call"
+    fi
+
+    # Method 3: Try with print-reply to see any errors
+    if command -v dbus-send &> /dev/null; then
+        dbus-send --print-reply --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
+        echo "Squeekboard shown via print-reply DBus call"
     fi
 elif [ "$keyboard_type" = "onboard" ]; then
     # Show onboard
@@ -231,7 +258,7 @@ elif [ "$keyboard_type" = "onboard" ]; then
 fi
 EOF
     chmod +x ~/keyboard-show.sh
-    
+
     # Create keyboard hide script
     cat > ~/keyboard-hide.sh << EOF
 #!/bin/bash
@@ -256,14 +283,14 @@ elif [ "$keyboard_type" = "onboard" ]; then
 fi
 EOF
     chmod +x ~/keyboard-hide.sh
-    
+
     echo "✓ Keyboard toggle scripts created."
 }
 
 # Function to update ConsultEase .env file
 update_env_file() {
     local keyboard_type=$1
-    
+
     # Find the ConsultEase directory
     local consultease_dir=""
     if [ -d "central_system" ]; then
@@ -274,9 +301,9 @@ update_env_file() {
         echo "⚠ ConsultEase directory not found, skipping .env file update."
         return
     fi
-    
+
     echo "Creating/updating .env file for ConsultEase..."
-    
+
     # Create or update .env file
     if [ ! -f "$consultease_dir/.env" ]; then
         cat > "$consultease_dir/.env" << EOF
@@ -298,7 +325,7 @@ EOF
         else
             echo "CONSULTEASE_KEYBOARD=$keyboard_type" >> "$consultease_dir/.env"
         fi
-        
+
         if [ "$keyboard_type" = "squeekboard" ]; then
             if grep -q "ONBOARD_DISABLE=" "$consultease_dir/.env"; then
                 sed -i "s/ONBOARD_DISABLE=.*/ONBOARD_DISABLE=1/" "$consultease_dir/.env"
@@ -323,7 +350,7 @@ EOF
             fi
         fi
     fi
-    
+
     echo "✓ ConsultEase .env file updated."
 }
 

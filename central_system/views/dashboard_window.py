@@ -30,25 +30,38 @@ class FacultyCard(QFrame):
         """
         self.setFrameShape(QFrame.StyledPanel)
 
-        # Reduced minimum size for better UI integration
-        self.setMinimumSize(220, 180)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        # Set fixed width and minimum height for consistent card size
+        self.setFixedWidth(220)
+        self.setMinimumHeight(180)
+
+        # Set size policy to prevent stretching
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)
+
+        # Add drop shadow effect for card-like appearance
+        self.setGraphicsEffect(self._create_shadow_effect())
 
         # Set styling based on faculty status
         self.update_style()
 
-        # Main layout with reduced margins
+        # Main layout with proper margins for card-like appearance
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(6)
+        main_layout.setContentsMargins(12, 12, 12, 12)
+        main_layout.setSpacing(8)
+        main_layout.setAlignment(Qt.AlignCenter)
 
         # Faculty info layout (image + text)
         info_layout = QHBoxLayout()
+        info_layout.setAlignment(Qt.AlignCenter)
 
-        # Faculty image - reduced size
+        # Faculty image - reduced size with improved styling
         image_label = QLabel()
-        image_label.setFixedSize(70, 70)
-        image_label.setStyleSheet("border: 1px solid #ddd; border-radius: 35px; background-color: white;")
+        image_label.setFixedSize(60, 60)
+        image_label.setStyleSheet("""
+            border: 1px solid #ddd;
+            border-radius: 30px;
+            background-color: white;
+            padding: 2px;
+        """)
         image_label.setScaledContents(True)
 
         # Try to load faculty image
@@ -71,50 +84,90 @@ class FacultyCard(QFrame):
 
         # Faculty text info
         text_layout = QVBoxLayout()
+        text_layout.setAlignment(Qt.AlignLeft)
+        text_layout.setSpacing(2)
 
         # Faculty name - reduced font size
         name_label = QLabel(self.faculty.name)
-        name_label.setStyleSheet("font-size: 16pt; font-weight: bold;")
+        name_label.setStyleSheet("font-size: 14pt; font-weight: bold;")
+        name_label.setAlignment(Qt.AlignLeft)
+        name_label.setWordWrap(True)
         text_layout.addWidget(name_label)
 
         # Department - reduced font size
         dept_label = QLabel(self.faculty.department)
-        dept_label.setStyleSheet("font-size: 11pt; color: #666;")
+        dept_label.setStyleSheet("font-size: 10pt; color: #666;")
+        dept_label.setAlignment(Qt.AlignLeft)
+        dept_label.setWordWrap(True)
         text_layout.addWidget(dept_label)
 
         info_layout.addLayout(text_layout)
         main_layout.addLayout(info_layout)
 
-        # Status indicator - removed borders and simplified
+        # Add a horizontal line separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        separator.setStyleSheet("background-color: #ddd; max-height: 1px;")
+        main_layout.addWidget(separator)
+
+        # Status indicator - improved layout and styling
         status_layout = QHBoxLayout()
+        status_layout.setAlignment(Qt.AlignLeft)
+        status_layout.setSpacing(4)
+
         status_icon = QLabel("●")
         if self.faculty.status:
             # No border on status icon, reduced font size
-            status_icon.setStyleSheet("font-size: 14pt; color: #4caf50; border: none;")
+            status_icon.setStyleSheet("font-size: 12pt; color: #4caf50; border: none;")
             status_text = QLabel("Available")
             # No border on status text, reduced font size
-            status_text.setStyleSheet("font-size: 12pt; color: #4caf50; border: none;")
+            status_text.setStyleSheet("font-size: 11pt; color: #4caf50; border: none;")
         else:
-            status_icon.setStyleSheet("font-size: 14pt; color: #f44336; border: none;")
+            status_icon.setStyleSheet("font-size: 12pt; color: #f44336; border: none;")
             status_text = QLabel("Unavailable")
-            status_text.setStyleSheet("font-size: 12pt; color: #f44336; border: none;")
+            status_text.setStyleSheet("font-size: 11pt; color: #f44336; border: none;")
 
         status_layout.addWidget(status_icon)
         status_layout.addWidget(status_text)
         status_layout.addStretch()
         main_layout.addLayout(status_layout)
 
-        # Request consultation button - more compact
+        # Request consultation button - more compact with improved styling
         request_button = QPushButton("Request Consultation")
         request_button.setEnabled(self.faculty.status)
         request_button.setStyleSheet("""
             QPushButton {
-                font-size: 11pt;
-                padding: 5px;
+                font-size: 10pt;
+                padding: 6px;
+                border-radius: 4px;
+                background-color: #2196F3;
+                color: white;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+            QPushButton:disabled {
+                background-color: #B0BEC5;
+                color: #ECEFF1;
             }
         """)
         request_button.clicked.connect(self.request_consultation)
         main_layout.addWidget(request_button)
+
+    def _create_shadow_effect(self):
+        """
+        Create a shadow effect for the card.
+        """
+        from PyQt5.QtWidgets import QGraphicsDropShadowEffect
+        from PyQt5.QtGui import QColor
+
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(10)
+        shadow.setColor(QColor(0, 0, 0, 50))
+        shadow.setOffset(0, 2)
+        return shadow
 
     def update_style(self):
         """
@@ -497,16 +550,38 @@ class DashboardWindow(BaseWindow):
 
         faculty_layout.addLayout(filter_layout)
 
-        # Faculty grid in a scroll area - reduced spacing
+        # Faculty grid in a scroll area with improved spacing and alignment
         self.faculty_grid = QGridLayout()
-        self.faculty_grid.setSpacing(15)
+        self.faculty_grid.setSpacing(20)  # Increased spacing between cards
+        self.faculty_grid.setAlignment(Qt.AlignCenter)  # Center the grid contents
+        self.faculty_grid.setContentsMargins(15, 15, 15, 15)  # Add margins around the grid
 
         faculty_scroll = QScrollArea()
         faculty_scroll.setWidgetResizable(True)
         faculty_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        faculty_scroll.setStyleSheet("""
+            QScrollArea {
+                background-color: transparent;
+                border: none;
+            }
+            QScrollBar:vertical {
+                width: 12px;
+                background: #f0f0f0;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background: #c0c0c0;
+                min-height: 20px;
+                border-radius: 6px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
 
         faculty_scroll_content = QWidget()
         faculty_scroll_content.setLayout(self.faculty_grid)
+        faculty_scroll_content.setStyleSheet("background-color: transparent;")
         faculty_scroll.setWidget(faculty_scroll_content)
 
         faculty_layout.addWidget(faculty_scroll)
@@ -555,15 +630,19 @@ class DashboardWindow(BaseWindow):
         # Calculate optimal number of columns based on screen width
         screen_width = QApplication.desktop().screenGeometry().width()
 
-        # Scale card width based on screen dimensions with reduced min/max constraints
-        card_width = max(180, min(250, int(screen_width * 0.18)))
+        # Fixed card width (matches the width set in FacultyCard)
+        card_width = 220
 
-        spacing = 15  # Reduced grid spacing
+        # Grid spacing (matches the spacing set in faculty_grid)
+        spacing = 20
 
         # Get the actual width of the faculty grid container
         grid_container_width = self.faculty_grid.parentWidget().width()
         if grid_container_width <= 0:  # If not yet available, estimate based on screen
             grid_container_width = int(screen_width * 0.6)  # 60% of screen for faculty grid
+
+        # Account for grid margins
+        grid_container_width -= 30  # 15px left + 15px right margin
 
         # Calculate how many cards can fit in a row, accounting for spacing
         max_cols = max(1, int(grid_container_width / (card_width + spacing)))
@@ -572,13 +651,26 @@ class DashboardWindow(BaseWindow):
         if screen_width < 800:
             max_cols = 1  # Force single column on very small screens
 
-        # Add faculty cards to grid
+        # Add faculty cards to grid with centering containers
         row, col = 0, 0
 
         for faculty in faculties:
+            # Create a container widget to center the card
+            container = QWidget()
+            container.setStyleSheet("background-color: transparent;")
+            container_layout = QHBoxLayout(container)
+            container_layout.setContentsMargins(0, 0, 0, 0)
+            container_layout.setAlignment(Qt.AlignCenter)
+
+            # Create the faculty card
             card = FacultyCard(faculty)
             card.consultation_requested.connect(self.show_consultation_form)
-            self.faculty_grid.addWidget(card, row, col)
+
+            # Add card to container
+            container_layout.addWidget(card)
+
+            # Add container to grid
+            self.faculty_grid.addWidget(container, row, col)
 
             col += 1
             if col >= max_cols:
@@ -596,7 +688,7 @@ class DashboardWindow(BaseWindow):
                 border-radius: 10px;
             """)
             no_results.setAlignment(Qt.AlignCenter)
-            self.faculty_grid.addWidget(no_results, 0, 0)
+            self.faculty_grid.addWidget(no_results, 0, 0, 1, max_cols)  # Span all columns
 
     def filter_faculty(self):
         """

@@ -8,7 +8,7 @@ import time
 import logging
 import subprocess
 import threading
-from PyQt5.QtCore import QObject, QTimer, pyqtSignal
+from PyQt5.QtCore import QObject, QTimer, pyqtSignal, QEvent
 from PyQt5.QtWidgets import QApplication, QLineEdit, QTextEdit, QPlainTextEdit
 
 logger = logging.getLogger(__name__)
@@ -174,34 +174,116 @@ class KeyboardManager(QObject):
 
     def _show_squeekboard(self):
         """Show squeekboard keyboard."""
+        logger.info("Attempting to show squeekboard keyboard")
+
         # First ensure squeekboard is running
         if not self._is_squeekboard_running():
             logger.info("Squeekboard not running, starting it...")
             try:
+                # Kill any existing zombie processes first
+                subprocess.run(['pkill', '-f', 'squeekboard'],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+
+                # Set up environment variables
+                env = dict(os.environ)
+                env['SQUEEKBOARD_FORCE'] = '1'
+                env['GDK_BACKEND'] = 'wayland,x11'
+                env['QT_QPA_PLATFORM'] = 'wayland;xcb'
+
+                # Start squeekboard with appropriate options
                 subprocess.Popen(['squeekboard'],
                                stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL,
-                               env=dict(os.environ, SQUEEKBOARD_FORCE="1"),
+                               env=env,
                                start_new_session=True)
+
                 # Give it a moment to start
                 time.sleep(0.5)
+                logger.info("Started squeekboard process")
             except Exception as e:
                 logger.error(f"Error starting squeekboard: {e}")
+                # Try to use the keyboard-show.sh script as fallback
+                self._try_keyboard_script()
                 return
 
         # Now show the keyboard via DBus
         if self.dbus_available:
             try:
-                cmd = [
-                    "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
-                    "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
-                ]
-                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                logger.info("Showed squeekboard via DBus")
+                # Try multiple times with different DBus commands to ensure it works
+                success = False
+
+                # Method 1: Standard DBus call
+                try:
+                    cmd = [
+                        "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
+                        "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
+                    ]
+                    result = subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    if result.returncode == 0:
+                        success = True
+                        logger.info("Showed squeekboard via standard DBus call")
+                except Exception as e:
+                    logger.warning(f"Standard DBus call failed: {e}")
+
+                # Method 2: Try with session bus explicitly
+                if not success:
+                    try:
+                        cmd = [
+                            "dbus-send", "--session", "--type=method_call", "--dest=sm.puri.OSK0",
+                            "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
+                        ]
+                        result = subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        if result.returncode == 0:
+                            success = True
+                            logger.info("Showed squeekboard via session DBus call")
+                    except Exception as e:
+                        logger.warning(f"Session DBus call failed: {e}")
+
+                # Method 3: Try with print-reply to see any errors
+                if not success:
+                    try:
+                        cmd = [
+                            "dbus-send", "--print-reply", "--type=method_call", "--dest=sm.puri.OSK0",
+                            "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
+                        ]
+                        result = subprocess.run(cmd, capture_output=True, text=True)
+                        logger.info(f"DBus print-reply result: {result.stdout}, errors: {result.stderr}")
+                        success = True
+                    except Exception as e:
+                        logger.warning(f"Print-reply DBus call failed: {e}")
+
+                if not success:
+                    # Try the keyboard script as a last resort
+                    self._try_keyboard_script()
             except Exception as e:
-                logger.error(f"Error showing squeekboard via DBus: {e}")
+                logger.error(f"All DBus methods failed: {e}")
+                # Try the keyboard script as a last resort
+                self._try_keyboard_script()
         else:
-            logger.warning("DBus not available, cannot show squeekboard reliably")
+            logger.warning("DBus not available, trying alternative methods")
+            # Try the keyboard script as a fallback
+            self._try_keyboard_script()
+
+    def _try_keyboard_script(self):
+        """Try to use the keyboard-show.sh script as a fallback method."""
+        try:
+            # Check if the keyboard script exists
+            home_dir = os.path.expanduser("~")
+            script_path = os.path.join(home_dir, "keyboard-show.sh")
+
+            if os.path.exists(script_path):
+                logger.info(f"Using keyboard script at {script_path}")
+                subprocess.Popen([script_path],
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+                return True
+            else:
+                logger.warning(f"Keyboard script not found at {script_path}")
+                return False
+        except Exception as e:
+            logger.error(f"Error using keyboard script: {e}")
+            return False
 
     def _hide_squeekboard(self):
         """Hide squeekboard keyboard."""
@@ -278,9 +360,31 @@ def install_keyboard_manager(app):
     Args:
         app: QApplication instance
     """
-    from PyQt5.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit, QComboBox
+    from PyQt5.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QApplication
+    from PyQt5.QtCore import QEvent, QObject
 
     keyboard = get_keyboard_manager()
+
+    # Create a global event filter to catch all focus events
+    class GlobalFocusFilter(QObject):
+        def eventFilter(self, obj, event):
+            # Check for focus events on input widgets
+            if event.type() == QEvent.FocusIn:
+                # Check if this is an input widget
+                if isinstance(obj, (QLineEdit, QTextEdit, QPlainTextEdit, QComboBox)):
+                    logger.debug(f"Focus gained on {obj.__class__.__name__}")
+                    # Show keyboard with a slight delay to ensure window is ready
+                    QTimer.singleShot(100, keyboard.show_keyboard)
+
+            # Always return False to allow the event to be processed by other filters
+            return False
+
+    # Create and install the global filter
+    global_filter = GlobalFocusFilter()
+    app.installEventFilter(global_filter)
+
+    # Store a reference to prevent garbage collection
+    app.global_focus_filter = global_filter
 
     # Original focus in/out event handlers
     original_focus_in = QLineEdit.focusInEvent
@@ -291,14 +395,16 @@ def install_keyboard_manager(app):
         # Call original handler
         original_focus_in(self, event)
         # Show keyboard
+        logger.debug(f"QLineEdit focus event in {self.objectName()}")
         keyboard.show_keyboard()
 
     # Override focus out event for QLineEdit
     def line_edit_focus_out(self, event):
         # Call original handler
         original_focus_out(self, event)
-        # Hide keyboard
-        keyboard.hide_keyboard()
+        # Don't hide keyboard on focus out - let it be handled manually
+        # This prevents the keyboard from disappearing when switching between fields
+        # keyboard.hide_keyboard()
 
     # Apply overrides
     QLineEdit.focusInEvent = line_edit_focus_in
@@ -310,11 +416,13 @@ def install_keyboard_manager(app):
 
     def text_edit_focus_in(self, event):
         original_text_focus_in(self, event)
+        logger.debug(f"QTextEdit focus event in {self.objectName()}")
         keyboard.show_keyboard()
 
     def text_edit_focus_out(self, event):
         original_text_focus_out(self, event)
-        keyboard.hide_keyboard()
+        # Don't hide keyboard on focus out
+        # keyboard.hide_keyboard()
 
     QTextEdit.focusInEvent = text_edit_focus_in
     QTextEdit.focusOutEvent = text_edit_focus_out
@@ -325,11 +433,13 @@ def install_keyboard_manager(app):
 
     def plain_text_focus_in(self, event):
         original_plain_focus_in(self, event)
+        logger.debug(f"QPlainTextEdit focus event in {self.objectName()}")
         keyboard.show_keyboard()
 
     def plain_text_focus_out(self, event):
         original_plain_focus_out(self, event)
-        keyboard.hide_keyboard()
+        # Don't hide keyboard on focus out
+        # keyboard.hide_keyboard()
 
     QPlainTextEdit.focusInEvent = plain_text_focus_in
     QPlainTextEdit.focusOutEvent = plain_text_focus_out
@@ -340,14 +450,26 @@ def install_keyboard_manager(app):
 
     def combo_focus_in(self, event):
         original_combo_focus_in(self, event)
+        logger.debug(f"QComboBox focus event in {self.objectName()}")
         keyboard.show_keyboard()
 
     def combo_focus_out(self, event):
         original_combo_focus_out(self, event)
-        keyboard.hide_keyboard()
+        # Don't hide keyboard on focus out
+        # keyboard.hide_keyboard()
 
     QComboBox.focusInEvent = combo_focus_in
     QComboBox.focusOutEvent = combo_focus_out
 
-    logger.info("Keyboard manager installed for application")
+    # Add a method to manually hide the keyboard when clicking outside input fields
+    def app_focus_changed(old, now):
+        if now is None or not isinstance(now, (QLineEdit, QTextEdit, QPlainTextEdit, QComboBox)):
+            # Clicked outside an input field, hide keyboard after a short delay
+            # to allow for switching between fields
+            QTimer.singleShot(500, keyboard.hide_keyboard)
+
+    # Connect to application's focus change signal
+    app.focusChanged.connect(app_focus_changed)
+
+    logger.info("Enhanced keyboard manager installed for application")
     return keyboard
