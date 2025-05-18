@@ -41,12 +41,13 @@ from central_system.views.login_window import create_keyboard_setup_script
 
 # Import utilities
 from central_system.utils import (
-    install_keyboard_handler,
     apply_stylesheet,
-    WindowTransitionManager
+    WindowTransitionManager,
+    get_keyboard_manager,
+    install_keyboard_manager
 )
-# Import keyboard integration
-from central_system.utils.direct_keyboard import get_direct_keyboard, setup_input_hooks
+# Import theme system
+from central_system.utils.theme import ConsultEaseTheme
 # Import icons module separately to avoid early QPixmap creation
 from central_system.utils import icons
 
@@ -69,10 +70,20 @@ class ConsultEaseApp:
         icons.initialize()
         logger.info("Initialized icons")
 
-        # Apply modern stylesheet (dark theme by default)
-        theme = self._get_theme_preference()
-        apply_stylesheet(self.app, theme)
-        logger.info(f"Applied {theme} theme stylesheet")
+        # Apply centralized theme stylesheet
+        try:
+            # Apply base stylesheet from theme system
+            self.app.setStyleSheet(ConsultEaseTheme.get_base_stylesheet())
+            logger.info("Applied centralized theme stylesheet")
+        except Exception as e:
+            logger.error(f"Failed to apply theme stylesheet: {e}")
+            # Fall back to old stylesheet as backup
+            try:
+                theme = self._get_theme_preference()
+                apply_stylesheet(self.app, theme)
+                logger.info(f"Applied fallback {theme} theme stylesheet")
+            except Exception as e2:
+                logger.error(f"Failed to apply fallback stylesheet: {e2}")
 
         # Create keyboard setup script for Raspberry Pi
         try:
@@ -81,22 +92,15 @@ class ConsultEaseApp:
         except Exception as e:
             logger.error(f"Failed to create keyboard setup script: {e}")
 
-        # Install keyboard handler for touch input
+        # Initialize unified keyboard manager for touch input
         try:
-            self.keyboard_handler = install_keyboard_handler(self.app)
-            logger.info("Installed virtual keyboard handler")
+            self.keyboard_handler = get_keyboard_manager()
+            # Install keyboard manager to handle focus events
+            install_keyboard_manager(self.app)
+            logger.info(f"Initialized keyboard manager with {self.keyboard_handler.active_keyboard} keyboard")
         except Exception as e:
-            logger.error(f"Failed to install virtual keyboard handler: {e}")
+            logger.error(f"Failed to initialize keyboard manager: {e}")
             self.keyboard_handler = None
-
-        # Initialize direct keyboard integration
-        try:
-            self.direct_keyboard = get_direct_keyboard()
-            setup_input_hooks()
-            logger.info("Initialized direct keyboard integration")
-        except Exception as e:
-            logger.error(f"Failed to initialize direct keyboard integration: {e}")
-            self.direct_keyboard = None
 
         # Initialize database
         init_db()
@@ -264,12 +268,24 @@ class ConsultEaseApp:
         self.current_student = student
 
         if self.dashboard_window is None:
+            # Create a new dashboard window
             self.dashboard_window = DashboardWindow(student)
             self.dashboard_window.change_window.connect(self.handle_window_change)
             self.dashboard_window.consultation_requested.connect(self.handle_consultation_request)
         else:
-            # Update student info if needed
+            # Update student info and reinitialize the UI
+            logger.info(f"Updating dashboard with new student: {student.name if student else 'None'}")
+
+            # Store the new student reference
             self.dashboard_window.student = student
+
+            # Reinitialize the UI to update the welcome message and other student-specific elements
+            self.dashboard_window.init_ui()
+
+            # Update the consultation panel with the new student
+            if hasattr(self.dashboard_window, 'consultation_panel'):
+                self.dashboard_window.consultation_panel.set_student(student)
+                self.dashboard_window.consultation_panel.refresh_history()
 
         # Populate faculty grid
         faculties = self.faculty_controller.get_all_faculty()
@@ -336,56 +352,15 @@ class ConsultEaseApp:
 
         # Define a callback for after the transition completes
         def after_transition():
-            # Set environment variable to prefer onboard
-            os.environ["CONSULTEASE_KEYBOARD"] = "onboard"
-            logger.info("Set CONSULTEASE_KEYBOARD=onboard environment variable")
-
-            # Force the keyboard to show using both methods
+            # Force the keyboard to show
             if self.keyboard_handler:
-                logger.info("Forcing keyboard to show using keyboard handler")
-                self.keyboard_handler.force_show_keyboard()
-                # Try again after delays
-                QTimer.singleShot(300, self.keyboard_handler.force_show_keyboard)
-                QTimer.singleShot(600, self.keyboard_handler.force_show_keyboard)
+                logger.info("Showing keyboard using improved keyboard handler")
+                self.keyboard_handler.show_keyboard()
 
-            # Also use direct keyboard integration
-            if hasattr(self, 'direct_keyboard') and self.direct_keyboard:
-                logger.info("Forcing keyboard to show using direct keyboard integration")
-                self.direct_keyboard.show_keyboard()
-
-                # Try again after delays
-                QTimer.singleShot(500, lambda: self.direct_keyboard.show_keyboard())
-                QTimer.singleShot(1000, lambda: self.direct_keyboard.show_keyboard())
-                QTimer.singleShot(1500, lambda: self.direct_keyboard.show_keyboard())
-
-            # Try direct onboard launch as a fallback
-            try:
-                # Check if onboard is available
-                onboard_check = subprocess.run(['which', 'onboard'],
-                                            stdout=subprocess.PIPE,
-                                            stderr=subprocess.PIPE)
-
-                if onboard_check.returncode == 0:
-                    # Kill any existing instances
-                    subprocess.run(['pkill', '-f', 'onboard'],
-                                 stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL)
-
-                    # Start onboard with appropriate options
-                    subprocess.Popen(
-                        ['onboard', '--size=small', '--layout=Phone', '--enable-background-transparency', '--theme=Nightshade'],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        start_new_session=True
-                    )
-                    logger.info("Started onboard directly from admin login")
-            except Exception as e:
-                logger.error(f"Error starting onboard directly: {e}")
-
-            # Focus the username input to trigger the keyboard
-            QTimer.singleShot(300, lambda: self.admin_login_window.username_input.setFocus())
-            # Focus again after a longer delay to ensure keyboard appears
-            QTimer.singleShot(800, lambda: self.admin_login_window.username_input.setFocus())
+                # Focus the username input to trigger the keyboard
+                QTimer.singleShot(300, lambda: self.admin_login_window.username_input.setFocus())
+                # Focus again after a longer delay to ensure keyboard appears
+                QTimer.singleShot(800, lambda: self.admin_login_window.username_input.setFocus())
 
         # Apply transition if there's a visible window to transition from
         if current_window:

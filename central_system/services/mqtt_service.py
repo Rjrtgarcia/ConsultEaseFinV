@@ -6,6 +6,8 @@ import time
 import os
 import configparser
 import pathlib
+import random
+from datetime import datetime
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -52,6 +54,11 @@ class MQTTService:
         # Message storage for retry
         self._last_message = None
         self._last_raw_message = None
+
+        # Message persistence
+        self.message_queue_dir = "mqtt_queue"
+        self._ensure_queue_directory()
+        self._load_persisted_messages()
 
         # Set up keep-alive timer
         self.keep_alive_interval = 60  # seconds
@@ -166,6 +173,9 @@ class MQTTService:
             for topic in self.topic_handlers.keys():
                 self.client.subscribe(topic)
                 logger.info(f"Subscribed to {topic}")
+
+            # Process any persisted messages
+            self._process_persisted_messages()
         else:
             logger.error(f"Failed to connect to MQTT broker with code {rc}")
             self.schedule_reconnect()
@@ -349,13 +359,18 @@ class MQTTService:
             retain (bool): Whether to retain the message
         """
         # Store in instance variable for potential retry
-        self._last_message = {
+        message = {
             'topic': topic,
             'data': data,
             'qos': qos,
             'retain': retain,
             'timestamp': time.time()
         }
+        self._last_message = message
+
+        # For important messages (QoS > 0), also persist to disk
+        if qos > 0:
+            self._store_message_to_disk(message)
 
     def publish_raw(self, topic, message, qos=0, retain=False, max_retries=3):
         """
@@ -466,13 +481,132 @@ class MQTTService:
             retain (bool): Whether to retain the message
         """
         # Store in instance variable for potential retry
-        self._last_raw_message = {
+        raw_message = {
             'topic': topic,
             'message': message,
             'qos': qos,
             'retain': retain,
-            'timestamp': time.time()
+            'timestamp': time.time(),
+            'is_raw': True
         }
+        self._last_raw_message = raw_message
+
+        # For important messages (QoS > 0), also persist to disk
+        if qos > 0:
+            self._store_message_to_disk(raw_message)
+
+    def _ensure_queue_directory(self):
+        """
+        Ensure the message queue directory exists.
+        """
+        try:
+            os.makedirs(self.message_queue_dir, exist_ok=True)
+            logger.debug(f"Ensured message queue directory exists: {self.message_queue_dir}")
+        except Exception as e:
+            logger.error(f"Error creating message queue directory: {str(e)}")
+
+    def _store_message_to_disk(self, message):
+        """
+        Store a message to disk for later delivery.
+
+        Args:
+            message (dict): Message data including topic, payload, QoS, etc.
+        """
+        try:
+            # Ensure directory exists
+            self._ensure_queue_directory()
+
+            # Generate a unique filename
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            random_id = random.randint(1000, 9999)
+            filename = f"{self.message_queue_dir}/msg_{timestamp}_{random_id}.json"
+
+            # Write message to file
+            with open(filename, 'w') as f:
+                json.dump(message, f)
+
+            logger.info(f"Stored message to {filename} for later delivery")
+        except Exception as e:
+            logger.error(f"Error storing message to disk: {str(e)}")
+
+    def _load_persisted_messages(self):
+        """
+        Load persisted messages from disk.
+        """
+        try:
+            # Ensure directory exists
+            self._ensure_queue_directory()
+
+            # Get list of message files
+            message_files = [f for f in os.listdir(self.message_queue_dir) if f.endswith('.json')]
+
+            if message_files:
+                logger.info(f"Found {len(message_files)} persisted messages")
+                # We'll process these when connected
+            else:
+                logger.debug("No persisted messages found")
+        except Exception as e:
+            logger.error(f"Error loading persisted messages: {str(e)}")
+
+    def _process_persisted_messages(self):
+        """
+        Process persisted messages from disk and attempt to send them.
+        """
+        if not self.is_connected:
+            logger.warning("Cannot process persisted messages: Not connected to MQTT broker")
+            return
+
+        try:
+            # Ensure directory exists
+            self._ensure_queue_directory()
+
+            # Get list of message files
+            message_files = [f for f in os.listdir(self.message_queue_dir) if f.endswith('.json')]
+
+            if not message_files:
+                logger.debug("No persisted messages to process")
+                return
+
+            logger.info(f"Processing {len(message_files)} persisted messages")
+
+            # Process each message file
+            for filename in message_files:
+                try:
+                    filepath = os.path.join(self.message_queue_dir, filename)
+
+                    # Read message from file
+                    with open(filepath, 'r') as f:
+                        message = json.load(f)
+
+                    # Attempt to send the message
+                    success = False
+                    if message.get('is_raw', False):
+                        # This is a raw message
+                        success = self.publish_raw(
+                            message['topic'],
+                            message['message'],
+                            message['qos'],
+                            message['retain']
+                        )
+                    else:
+                        # This is a JSON message
+                        success = self.publish(
+                            message['topic'],
+                            message['data'],
+                            message['qos'],
+                            message['retain']
+                        )
+
+                    if success:
+                        logger.info(f"Successfully sent persisted message from {filepath}")
+                        # Remove the file
+                        os.remove(filepath)
+                    else:
+                        logger.warning(f"Failed to send persisted message from {filepath}, will retry later")
+                except Exception as e:
+                    logger.error(f"Error processing persisted message {filename}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error processing persisted messages: {str(e)}")
 
     def _load_settings(self):
         """

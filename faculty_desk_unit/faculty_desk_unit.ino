@@ -23,11 +23,19 @@ const char* mqtt_server = MQTT_SERVER;
 const int mqtt_port = MQTT_PORT;
 char mqtt_topic_messages[50];
 char mqtt_topic_status[50];
+char mqtt_topic_legacy_messages[50];
+char mqtt_topic_legacy_status[50];
 char mqtt_client_id[50];
 
-// BLE UUIDs
-#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+// BLE UUIDs - Standardized across all components
+#define SERVICE_UUID        "91BAD35B-F3CB-4FC1-8603-88D5137892A6"
+#define CHARACTERISTIC_UUID "D9473AA3-E6F4-424B-B6E7-A5F94FDDA285"
+
+// BLE Connection Management
+unsigned long lastBleSignalTime = 0;
+unsigned long lastStatusUpdate = 0;
+int bleReconnectAttempts = 0;
+bool alwaysAvailable = ALWAYS_AVAILABLE; // Use the value from config.h
 
 // TFT Display pins for ST7789
 #define TFT_CS    5
@@ -86,21 +94,40 @@ unsigned long lastTimeUpdate = 0;
 // Gold accent width
 #define ACCENT_WIDTH 5
 
-// BLE Server Callbacks
+// BLE Server Callbacks with improved connection handling
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
       deviceConnected = true;
+      lastBleSignalTime = millis();  // Record the time of connection
+      bleReconnectAttempts = 0;      // Reset reconnection attempts
+
+      // Publish to both standardized and legacy topics for backward compatibility
       mqttClient.publish(mqtt_topic_status, "keychain_connected");
+      mqttClient.publish(mqtt_topic_legacy_status, "keychain_connected");
+
       Serial.println("BLE client connected");
+
+      // Log connection details
+      Serial.print("Connection time: ");
+      Serial.println(lastBleSignalTime);
     };
 
     void onDisconnect(BLEServer* pServer) {
       deviceConnected = false;
+
+      // Publish to both standardized and legacy topics for backward compatibility
       mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
+      mqttClient.publish(mqtt_topic_legacy_status, "keychain_disconnected");
+
       Serial.println("BLE client disconnected");
+      Serial.print("Disconnection time: ");
+      Serial.println(millis());
 
       // Restart advertising so new clients can connect
       BLEDevice::startAdvertising();
+
+      // Don't reset reconnection attempts here - we'll manage that in the main loop
+      // This allows proper tracking of reconnection attempts
     }
 };
 
@@ -187,6 +214,71 @@ String processMessage(String message) {
 void drawGoldAccent() {
   // Draw gold accent that spans the entire height except status bar
   tft.fillRect(0, 0, ACCENT_WIDTH, tft.height() - STATUS_HEIGHT, COLOR_ACCENT);
+}
+
+// Centralized UI update function that preserves the gold accent
+void updateUIArea(int area, const String &message = "") {
+  // Area types:
+  // 0 = Full message area
+  // 1 = Message title area only
+  // 2 = Message content area only
+  // 3 = Status bar only
+
+  switch (area) {
+    case 0: // Full message area
+      // Clear the message area but preserve gold accent
+      tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP,
+                  tft.width() - ACCENT_WIDTH,
+                  tft.height() - MESSAGE_AREA_TOP - STATUS_HEIGHT,
+                  COLOR_MESSAGE_BG);
+
+      // Ensure gold accent is intact
+      drawGoldAccent();
+
+      // If message provided, display it
+      if (message.length() > 0) {
+        tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
+        tft.setTextSize(2);
+        tft.setTextColor(NU_GOLD);
+        tft.println(message);
+      }
+      break;
+
+    case 1: // Message title area only
+      // Clear just the title area
+      tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP,
+                  tft.width() - ACCENT_WIDTH,
+                  MESSAGE_TITLE_HEIGHT,
+                  COLOR_MESSAGE_BG);
+
+      // Ensure gold accent is intact
+      drawGoldAccent();
+
+      // If message provided, display it as title
+      if (message.length() > 0) {
+        tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
+        tft.setTextSize(2);
+        tft.setTextColor(NU_GOLD);
+        tft.println(message);
+      }
+      break;
+
+    case 2: // Message content area only
+      // Clear just the content area below title
+      tft.fillRect(ACCENT_WIDTH, MESSAGE_TEXT_TOP,
+                  tft.width() - ACCENT_WIDTH,
+                  tft.height() - MESSAGE_TEXT_TOP - STATUS_HEIGHT,
+                  COLOR_MESSAGE_BG);
+
+      // Ensure gold accent is intact
+      drawGoldAccent();
+      break;
+
+    case 3: // Status bar only
+      // Update status bar
+      displaySystemStatus(message);
+      break;
+  }
 }
 
 // Function to test the full display
@@ -284,11 +376,8 @@ void updateTimeDisplay() {
 
 // Function to display a new message
 void displayMessage(String message) {
-  // Clear message area but preserve gold accent
-  tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, tft.height() - MESSAGE_AREA_TOP - STATUS_HEIGHT, COLOR_MESSAGE_BG);
-
-  // Ensure gold accent bar is continuous
-  drawGoldAccent();
+  // Use centralized UI update function to clear the full message area
+  updateUIArea(0);
 
   // Display "New Message:" title with gold accent
   tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 5);
@@ -354,7 +443,7 @@ void displaySystemStatus(String status) {
   tft.drawFastHLine(0, tft.height() - STATUS_HEIGHT, tft.width(), COLOR_ACCENT);
 }
 
-// MQTT callback
+// MQTT callback with improved topic handling
 void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message arrived [");
   Serial.print(topic);
@@ -375,6 +464,12 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.println(length);
   Serial.print("Content: ");
   Serial.println(message);
+
+  // Check if this is a system ping message (for keeping connection alive)
+  if (strcmp(topic, MQTT_TOPIC_NOTIFICATIONS) == 0 && message.indexOf("ping") >= 0) {
+    Serial.println("Received system ping, no need to display");
+    return;
+  }
 
   // Process the message based on format
   message = processMessage(message);
@@ -399,6 +494,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
   if (deviceConnected) {
     pCharacteristic->setValue(message.c_str());
     pCharacteristic->notify();
+
+    // Update the last BLE signal time
+    lastBleSignalTime = millis();
   }
 }
 
@@ -525,12 +623,17 @@ void reconnect() {
     if (mqttClient.connect(clientId.c_str())) {
       Serial.println("connected");
       displaySystemStatus("MQTT connected");
-      // Subscribe to message topics (both the faculty-specific topic and the legacy topic)
+      // Subscribe to message topics (both standardized and legacy topics)
       mqttClient.subscribe(mqtt_topic_messages);
-      mqttClient.subscribe("professor/messages");  // Subscribe to alternative topic for backward compatibility
+      mqttClient.subscribe(mqtt_topic_legacy_messages);
+
+      // Also subscribe to system notifications for ping messages
+      mqttClient.subscribe(MQTT_TOPIC_NOTIFICATIONS);
+
       Serial.println("Subscribed to topics:");
       Serial.println(mqtt_topic_messages);
-      Serial.println("professor/messages");
+      Serial.println(mqtt_topic_legacy_messages);
+      Serial.println(MQTT_TOPIC_NOTIFICATIONS);
 
       // Display a brief confirmation in message area - preserve gold accent
       tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, 40, COLOR_MESSAGE_BG);
@@ -598,14 +701,28 @@ void setup() {
   Serial.print("Current time: ");
   Serial.println(current_date_time);
 
-  // Initialize MQTT topics with faculty ID
+  // Initialize always available mode from config
+  alwaysAvailable = ALWAYS_AVAILABLE;
+  Serial.print("Always available mode: ");
+  Serial.println(alwaysAvailable ? "ENABLED" : "DISABLED");
+
+  // Initialize MQTT topics with faculty ID - both standardized and legacy
   sprintf(mqtt_topic_messages, MQTT_TOPIC_REQUESTS, FACULTY_ID);
   sprintf(mqtt_topic_status, MQTT_TOPIC_STATUS, FACULTY_ID);
+  strcpy(mqtt_topic_legacy_messages, MQTT_LEGACY_MESSAGES);
+  strcpy(mqtt_topic_legacy_status, MQTT_LEGACY_STATUS);
   sprintf(mqtt_client_id, "DeskUnit_%s", FACULTY_NAME);
 
-  Serial.print("MQTT topics initialized: ");
+  Serial.println("MQTT topics initialized:");
+  Serial.print("Standard messages topic: ");
   Serial.println(mqtt_topic_messages);
+  Serial.print("Standard status topic: ");
   Serial.println(mqtt_topic_status);
+  Serial.print("Legacy messages topic: ");
+  Serial.println(mqtt_topic_legacy_messages);
+  Serial.print("Legacy status topic: ");
+  Serial.println(mqtt_topic_legacy_status);
+  Serial.print("Client ID: ");
   Serial.println(mqtt_client_id);
 
   // Initialize SPI communication
@@ -713,9 +830,11 @@ void setup() {
   // Initialize connection status
   deviceConnected = false;
   oldDeviceConnected = false;
+  lastBleSignalTime = millis();  // Initialize the last BLE signal time
 
-  // Publish initial status to MQTT
+  // Publish initial status to MQTT (both standardized and legacy topics)
   mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
+  mqttClient.publish(mqtt_topic_legacy_status, "keychain_disconnected");
   Serial.println("BLE server ready, waiting for keychain connection");
   displaySystemStatus("Waiting for keychain...");
 
@@ -764,47 +883,56 @@ void loop() {
       reconnect();
     } else {
       // Periodically check if we're still receiving messages by pinging the broker
-      mqttClient.publish("consultease/system/ping", "ping");
+      mqttClient.publish(MQTT_TOPIC_NOTIFICATIONS, "ping");
     }
   }
 
   // Process MQTT messages
   mqttClient.loop();
 
-  // BLE connection management
-  // Handle connection and disconnection events
-  if (deviceConnected != oldDeviceConnected) {
-    if (deviceConnected) {
-      // A client connected
-      displaySystemStatus("Keychain connected!");
+  // BLE connection management with improved reliability
+  // Handle BLE connection state changes
+  if (deviceConnected && !oldDeviceConnected) {
+    // Just connected
+    oldDeviceConnected = deviceConnected;
+    Serial.println("BLE client connected - updating status");
+    mqttClient.publish(mqtt_topic_status, "keychain_connected");
+    mqttClient.publish(mqtt_topic_legacy_status, "keychain_connected");
+    lastStatusUpdate = currentMillis;
 
-      // Show a notification about keychain connection - seamless design
-      tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, 40, COLOR_MESSAGE_BG);
+    // Show a notification about keychain connection using centralized UI function
+    updateUIArea(3, "Keychain connected!");
+    updateUIArea(1, "Keychain Connected");
+    delay(2000);
 
-      // Ensure gold accent is intact
-      drawGoldAccent();
-
-      tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
-      tft.setTextSize(2);
-      tft.setTextColor(NU_GOLD);
-      tft.println("Keychain Connected");
-      delay(2000);
+    // If we have a last message, redisplay it, otherwise clear
+    if (lastMessage.length() > 0) {
+      displayMessage(lastMessage);
     } else {
-      // A client disconnected
-      displaySystemStatus("Keychain disconnected!");
-
-      // Show a notification about keychain disconnection
-      tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, 40, COLOR_MESSAGE_BG);
-
-      // Ensure gold accent is intact
+      tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, tft.height() - MESSAGE_AREA_TOP - STATUS_HEIGHT, COLOR_MESSAGE_BG);
       drawGoldAccent();
-
-      tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
-      tft.setTextSize(2);
-      tft.setTextColor(COLOR_STATUS_ERROR);
-      tft.println("Keychain Disconnected");
-      delay(2000);
     }
+  }
+
+  if (!deviceConnected && oldDeviceConnected) {
+    // Just disconnected
+    oldDeviceConnected = deviceConnected;
+    Serial.println("BLE client disconnected - updating status");
+
+    // Always update status when BLE disconnects
+    mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
+    mqttClient.publish(mqtt_topic_legacy_status, "keychain_disconnected");
+
+    // Show a notification about keychain disconnection using centralized UI function
+    updateUIArea(3, "Keychain disconnected!");
+    updateUIArea(1, "Keychain Disconnected");
+
+    // Use error color for the disconnection message
+    tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
+    tft.setTextSize(2);
+    tft.setTextColor(COLOR_STATUS_ERROR);
+    tft.println("Keychain Disconnected");
+    delay(2000);
 
     // If we have a last message, redisplay it, otherwise clear
     if (lastMessage.length() > 0) {
@@ -814,22 +942,106 @@ void loop() {
       drawGoldAccent();
     }
 
-    oldDeviceConnected = deviceConnected;
+    // Restart advertising so new clients can connect
+    BLEDevice::startAdvertising();
   }
 
-  // currentMillis is already defined at the beginning of the loop
+  // BLE reconnection logic - improved with better handling for always available mode
+  if (!deviceConnected) {
+    // Check if we've lost connection for longer than the timeout
+    if (currentMillis - lastBleSignalTime > BLE_CONNECTION_TIMEOUT) {
+      // Only attempt reconnection if we haven't exceeded the maximum attempts
+      if (bleReconnectAttempts < BLE_RECONNECT_ATTEMPTS) {
+        Serial.print("BLE connection timed out. Attempting reconnection (");
+        Serial.print(bleReconnectAttempts + 1);
+        Serial.print(" of ");
+        Serial.print(BLE_RECONNECT_ATTEMPTS);
+        Serial.println(")");
 
-  // Periodically refresh the current connection status
-  static unsigned long lastStatusUpdateTime = 0;
-  if (currentMillis - lastStatusUpdateTime > 300000) { // Every 5 minutes
-    lastStatusUpdateTime = currentMillis;
-    // Re-publish current connection status
+        // Restart advertising
+        BLEDevice::startAdvertising();
+
+        // Increment reconnection attempts
+        bleReconnectAttempts++;
+
+        // Update last signal time to prevent rapid reconnection attempts
+        lastBleSignalTime = currentMillis;
+
+        // Display reconnection attempt
+        displaySystemStatus("Attempting BLE reconnection...");
+      } else if (bleReconnectAttempts == BLE_RECONNECT_ATTEMPTS) {
+        // We've reached the maximum number of attempts
+        Serial.println("Maximum BLE reconnection attempts reached");
+
+        // Display status message
+        displaySystemStatus("BLE reconnection failed");
+
+        // Increment to prevent repeated messages
+        bleReconnectAttempts++;
+
+        // Reset the BLE device if we've reached max attempts
+        // This can help recover from some BLE stack issues
+        if (bleReconnectAttempts > BLE_RECONNECT_ATTEMPTS + 5) {
+          Serial.println("Resetting BLE device after multiple failed reconnection attempts");
+          BLEDevice::deinit(true);  // Full deinit
+          delay(1000);
+
+          // Reinitialize BLE
+          char ble_device_name[50];
+          sprintf(ble_device_name, "ProfDeskUnit_%s", FACULTY_NAME);
+          BLEDevice::init(ble_device_name);
+
+          // Recreate server and service
+          pServer = BLEDevice::createServer();
+          pServer->setCallbacks(new MyServerCallbacks());
+          BLEService *pService = pServer->createService(SERVICE_UUID);
+          pCharacteristic = pService->createCharacteristic(
+                            CHARACTERISTIC_UUID,
+                            BLECharacteristic::PROPERTY_READ   |
+                            BLECharacteristic::PROPERTY_WRITE  |
+                            BLECharacteristic::PROPERTY_NOTIFY |
+                            BLECharacteristic::PROPERTY_INDICATE
+                          );
+          pCharacteristic->addDescriptor(new BLE2902());
+          pService->start();
+          BLEDevice::startAdvertising();
+
+          // Reset counters
+          bleReconnectAttempts = 0;
+          lastBleSignalTime = currentMillis;
+          displaySystemStatus("BLE device reset completed");
+        }
+      }
+    }
+  } else {
+    // Reset reconnection attempts when connected
+    bleReconnectAttempts = 0;
+  }
+
+  // Periodic status updates with improved efficiency
+  if (currentMillis - lastStatusUpdate > 300000) { // Every 5 minutes
+    lastStatusUpdate = currentMillis;
+
+    // Determine status message based on connection state
+    const char* status_message;
+
     if (deviceConnected) {
-      mqttClient.publish(mqtt_topic_status, "keychain_connected");
+      status_message = "keychain_connected";
       Serial.println("Periodic BLE connected status update sent");
     } else {
-      mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
+      status_message = "keychain_disconnected";
       Serial.println("Periodic BLE disconnected status update sent");
+    }
+
+    // Send to both standardized and legacy topics
+    mqttClient.publish(mqtt_topic_status, status_message);
+    mqttClient.publish(mqtt_topic_legacy_status, status_message);
+
+    // Also update the display status
+    if (deviceConnected) {
+      displaySystemStatus("BLE connected");
+    } else {
+      displaySystemStatus("BLE disconnected");
     }
   }
 

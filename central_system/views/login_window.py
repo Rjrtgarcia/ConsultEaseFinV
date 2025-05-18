@@ -5,6 +5,7 @@ from PyQt5.QtGui import QPixmap, QIcon
 import os
 
 from .base_window import BaseWindow
+from central_system.utils.theme import ConsultEaseTheme
 
 class LoginWindow(BaseWindow):
     """
@@ -49,19 +50,19 @@ class LoginWindow(BaseWindow):
 
         # Dark header background
         header_frame = QFrame()
-        header_frame.setStyleSheet("background-color: #232323; color: white;")
+        header_frame.setStyleSheet(f"background-color: {ConsultEaseTheme.PRIMARY_COLOR}; color: {ConsultEaseTheme.TEXT_LIGHT};")
         header_layout = QVBoxLayout(header_frame)
         header_layout.setContentsMargins(20, 20, 20, 20)
 
         # Title
         title_label = QLabel("ConsultEase")
-        title_label.setStyleSheet("font-size: 36pt; font-weight: bold; color: white;")
+        title_label.setStyleSheet(f"font-size: {ConsultEaseTheme.FONT_SIZE_XXLARGE}pt; font-weight: bold; color: {ConsultEaseTheme.TEXT_LIGHT};")
         title_label.setAlignment(Qt.AlignCenter)
         header_layout.addWidget(title_label)
 
         # Instruction label
         instruction_label = QLabel("Please scan your RFID card to authenticate")
-        instruction_label.setStyleSheet("font-size: 18pt; color: white;")
+        instruction_label.setStyleSheet(f"font-size: {ConsultEaseTheme.FONT_SIZE_LARGE}pt; color: {ConsultEaseTheme.TEXT_LIGHT};")
         instruction_label.setAlignment(Qt.AlignCenter)
         header_layout.addWidget(instruction_label)
 
@@ -76,26 +77,26 @@ class LoginWindow(BaseWindow):
 
         # RFID scanning indicator
         self.scanning_frame = QFrame()
-        self.scanning_frame.setStyleSheet('''
-            QFrame {
-                background-color: #e0e0e0;
-                border-radius: 10px;
+        self.scanning_frame.setStyleSheet(f'''
+            QFrame {{
+                background-color: {ConsultEaseTheme.BG_SECONDARY};
+                border-radius: {ConsultEaseTheme.BORDER_RADIUS_LARGE}px;
                 border: 2px solid #ccc;
-            }
+            }}
         ''')
         scanning_layout = QVBoxLayout(self.scanning_frame)
         scanning_layout.setContentsMargins(30, 30, 30, 30)
         scanning_layout.setSpacing(20)
 
         self.scanning_status_label = QLabel("Ready to Scan")
-        self.scanning_status_label.setStyleSheet("font-size: 20pt; color: #4a86e8;")
+        self.scanning_status_label.setStyleSheet(f"font-size: {ConsultEaseTheme.FONT_SIZE_XLARGE}pt; color: {ConsultEaseTheme.SECONDARY_COLOR};")
         self.scanning_status_label.setAlignment(Qt.AlignCenter)
         scanning_layout.addWidget(self.scanning_status_label)
 
         self.rfid_icon_label = QLabel()
         # Ideally, we would have an RFID icon image here
         self.rfid_icon_label.setText("🔄")
-        self.rfid_icon_label.setStyleSheet("font-size: 48pt; color: #4a86e8;")
+        self.rfid_icon_label.setStyleSheet(f"font-size: 48pt; color: {ConsultEaseTheme.SECONDARY_COLOR};")
         self.rfid_icon_label.setAlignment(Qt.AlignCenter)
         scanning_layout.addWidget(self.rfid_icon_label)
 
@@ -104,34 +105,36 @@ class LoginWindow(BaseWindow):
 
         self.rfid_input = QLineEdit()
         self.rfid_input.setPlaceholderText("Enter RFID manually")
-        self.rfid_input.setStyleSheet("""
-            QLineEdit {
+        self.rfid_input.setStyleSheet(f"""
+            QLineEdit {{
                 border: 1px solid #ccc;
-                border-radius: 5px;
-                padding: 8px;
-                font-size: 14pt;
-                background-color: #ffffff;
-            }
-            QLineEdit:focus {
-                border: 1px solid #4a86e8;
-            }
+                border-radius: {ConsultEaseTheme.BORDER_RADIUS_NORMAL}px;
+                padding: {ConsultEaseTheme.PADDING_NORMAL}px;
+                font-size: {ConsultEaseTheme.FONT_SIZE_NORMAL}pt;
+                background-color: {ConsultEaseTheme.BG_PRIMARY};
+                min-height: {ConsultEaseTheme.TOUCH_MIN_HEIGHT}px;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {ConsultEaseTheme.PRIMARY_COLOR};
+            }}
         """)
         self.rfid_input.returnPressed.connect(self.handle_manual_rfid_entry)
         manual_input_layout.addWidget(self.rfid_input, 3)
 
         submit_button = QPushButton("Submit")
-        submit_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4a86e8;
-                color: #ffffff;
+        submit_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {ConsultEaseTheme.PRIMARY_COLOR};
+                color: {ConsultEaseTheme.TEXT_LIGHT};
                 border: none;
-                padding: 8px 15px;
-                border-radius: 5px;
+                padding: {ConsultEaseTheme.PADDING_NORMAL}px {ConsultEaseTheme.PADDING_LARGE}px;
+                border-radius: {ConsultEaseTheme.BORDER_RADIUS_NORMAL}px;
                 font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #3a76d8;
-            }
+                min-height: {ConsultEaseTheme.TOUCH_MIN_HEIGHT}px;
+            }}
+            QPushButton:hover {{
+                background-color: #1a4b7c;
+            }}
         """)
         submit_button.clicked.connect(self.handle_manual_rfid_entry)
         manual_input_layout.addWidget(submit_button, 1)
@@ -140,19 +143,21 @@ class LoginWindow(BaseWindow):
 
         # Add the simulate button inside the scanning frame
         self.simulate_button = QPushButton("Simulate RFID Scan")
-        self.simulate_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4a86e8;
-                color: #ffffff;
+        self.simulate_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {ConsultEaseTheme.SECONDARY_COLOR};
+                color: {ConsultEaseTheme.TEXT_PRIMARY};
                 border: none;
-                padding: 10px 20px;
-                border-radius: 5px;
+                padding: {ConsultEaseTheme.PADDING_NORMAL}px {ConsultEaseTheme.PADDING_LARGE}px;
+                border-radius: {ConsultEaseTheme.BORDER_RADIUS_NORMAL}px;
                 font-weight: bold;
                 margin-top: 15px;
-            }
-            QPushButton:hover {
-                background-color: #3a76d8;
-            }
+                min-height: {ConsultEaseTheme.TOUCH_MIN_HEIGHT}px;
+            }}
+            QPushButton:hover {{
+                background-color: #2980b9;
+                color: {ConsultEaseTheme.TEXT_LIGHT};
+            }}
         """)
         self.simulate_button.clicked.connect(self.simulate_rfid_scan)
         scanning_layout.addWidget(self.simulate_button)
@@ -164,24 +169,25 @@ class LoginWindow(BaseWindow):
 
         # Footer with admin login button
         footer_frame = QFrame()
-        footer_frame.setStyleSheet("background-color: #232323;")
+        footer_frame.setStyleSheet(f"background-color: {ConsultEaseTheme.PRIMARY_COLOR};")
         footer_frame.setFixedHeight(70)
         footer_layout = QHBoxLayout(footer_frame)
 
         # Admin login button
         admin_button = QPushButton("Admin Login")
-        admin_button.setStyleSheet('''
-            QPushButton {
-                background-color: #808080;
-                color: white;
+        admin_button.setStyleSheet(f'''
+            QPushButton {{
+                background-color: {ConsultEaseTheme.BG_DARK};
+                color: {ConsultEaseTheme.TEXT_LIGHT};
                 border: none;
-                border-radius: 5px;
-                padding: 10px 20px;
+                border-radius: {ConsultEaseTheme.BORDER_RADIUS_NORMAL}px;
+                padding: {ConsultEaseTheme.PADDING_NORMAL}px {ConsultEaseTheme.PADDING_LARGE}px;
                 max-width: 200px;
-            }
-            QPushButton:hover {
-                background-color: #909090;
-            }
+                min-height: {ConsultEaseTheme.TOUCH_MIN_HEIGHT}px;
+            }}
+            QPushButton:hover {{
+                background-color: #3a4b5c;
+            }}
         ''')
         admin_button.clicked.connect(self.admin_login)
 
@@ -375,13 +381,13 @@ class LoginWindow(BaseWindow):
 
         self.rfid_reading = True
         self.scanning_status_label.setText("Scanning...")
-        self.scanning_status_label.setStyleSheet("font-size: 20pt; color: #4a86e8;")
-        self.scanning_frame.setStyleSheet('''
-            QFrame {
-                background-color: #e0e0e0;
-                border-radius: 10px;
-                border: 2px solid #4a86e8;
-            }
+        self.scanning_status_label.setStyleSheet(f"font-size: {ConsultEaseTheme.FONT_SIZE_XLARGE}pt; color: {ConsultEaseTheme.SECONDARY_COLOR};")
+        self.scanning_frame.setStyleSheet(f'''
+            QFrame {{
+                background-color: {ConsultEaseTheme.BG_SECONDARY};
+                border-radius: {ConsultEaseTheme.BORDER_RADIUS_LARGE}px;
+                border: 2px solid {ConsultEaseTheme.SECONDARY_COLOR};
+            }}
         ''')
         self.scanning_timer.start(500)  # Update animation every 500ms
 
@@ -392,13 +398,13 @@ class LoginWindow(BaseWindow):
         self.rfid_reading = False
         self.scanning_timer.stop()
         self.scanning_status_label.setText("Ready to Scan")
-        self.scanning_status_label.setStyleSheet("font-size: 20pt; color: #4a86e8;")
-        self.scanning_frame.setStyleSheet('''
-            QFrame {
-                background-color: #e0e0e0;
-                border-radius: 10px;
+        self.scanning_status_label.setStyleSheet(f"font-size: {ConsultEaseTheme.FONT_SIZE_XLARGE}pt; color: {ConsultEaseTheme.SECONDARY_COLOR};")
+        self.scanning_frame.setStyleSheet(f'''
+            QFrame {{
+                background-color: {ConsultEaseTheme.BG_SECONDARY};
+                border-radius: {ConsultEaseTheme.BORDER_RADIUS_LARGE}px;
                 border: 2px solid #ccc;
-            }
+            }}
         ''')
         self.rfid_icon_label.setText("🔄")
 

@@ -2,6 +2,7 @@ import logging
 import datetime
 from ..services import get_mqtt_service
 from ..models import Consultation, ConsultationStatus, get_db
+from ..utils.mqtt_topics import MQTTTopics
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -113,13 +114,13 @@ class ConsultationController:
                 simple_message += f"Course: {course_code}\n"
             simple_message += f"Request: {request_message}"
 
-            # Publish directly to the professor/messages topic which is guaranteed to work
-            success_direct = self.mqtt_service.publish_raw("professor/messages", simple_message)
+            # Publish directly to the legacy topic which is guaranteed to work
+            success_direct = self.mqtt_service.publish_raw(MQTTTopics.LEGACY_FACULTY_MESSAGES, simple_message)
 
             if success_direct:
-                logger.info(f"Successfully published direct message to professor/messages")
+                logger.info(f"Successfully published direct message to {MQTTTopics.LEGACY_FACULTY_MESSAGES}")
             else:
-                logger.error(f"Failed to publish direct message to professor/messages")
+                logger.error(f"Failed to publish direct message to {MQTTTopics.LEGACY_FACULTY_MESSAGES}")
 
             # Also try the regular publishing method
             publish_success = self._publish_consultation(consultation)
@@ -192,50 +193,50 @@ class ConsultationController:
 
             logger.info(f"Preparing to publish consultation request {consultation.id} for faculty {faculty.id}")
 
-            # IMPORTANT: First publish to the plain text topic that the faculty desk unit is known to use
+            # IMPORTANT: First publish to the legacy topic that the faculty desk unit is known to use
             # This is the topic used in the faculty desk unit code and is GUARANTEED to work
-            alt_topic = "professor/messages"
+            legacy_topic = MQTTTopics.LEGACY_FACULTY_MESSAGES
 
             # Publish the message directly (not as JSON) to match the faculty desk unit code
             # This is the MOST RELIABLE method and should work regardless of faculty ID
-            success_alt = self.mqtt_service.publish_raw(alt_topic, message)
+            success_legacy = self.mqtt_service.publish_raw(legacy_topic, message)
 
-            if success_alt:
-                logger.info(f"Successfully published consultation request to faculty desk unit topic {alt_topic}")
+            if success_legacy:
+                logger.info(f"Successfully published consultation request to legacy topic {legacy_topic}")
             else:
-                logger.error(f"Failed to publish consultation request to faculty desk unit topic {alt_topic}")
+                logger.error(f"Failed to publish consultation request to legacy topic {legacy_topic}")
 
-            # Now publish to faculty-specific topic
-            topic = f"consultease/faculty/{faculty.id}/requests"
+            # Now publish to faculty-specific topic using standardized format
+            faculty_requests_topic = MQTTTopics.get_faculty_requests_topic(faculty.id)
 
             # The MQTT service will format the message for the faculty desk unit
-            success = self.mqtt_service.publish(topic, payload)
+            success = self.mqtt_service.publish(faculty_requests_topic, payload)
 
             if success:
-                logger.info(f"Successfully published consultation request to {topic}")
+                logger.info(f"Successfully published consultation request to {faculty_requests_topic}")
             else:
-                logger.error(f"Failed to publish consultation request to {topic}")
+                logger.error(f"Failed to publish consultation request to {faculty_requests_topic}")
 
-            # Try publishing to the faculty-specific topic in plain text format as well
+            # Try publishing to the faculty-specific messages topic in plain text format as well
             # This provides maximum compatibility
-            alt_topic_faculty = f"consultease/faculty/{faculty.id}/messages"
-            success_faculty = self.mqtt_service.publish_raw(alt_topic_faculty, message)
+            faculty_messages_topic = MQTTTopics.get_faculty_messages_topic(faculty.id)
+            success_faculty = self.mqtt_service.publish_raw(faculty_messages_topic, message)
 
             if success_faculty:
-                logger.info(f"Successfully published plain text message to {alt_topic_faculty}")
+                logger.info(f"Successfully published plain text message to {faculty_messages_topic}")
             else:
-                logger.error(f"Failed to publish plain text message to {alt_topic_faculty}")
+                logger.error(f"Failed to publish plain text message to {faculty_messages_topic}")
 
-            # IMPORTANT: Also publish to the exact same topics used in the test function
+            # For backward compatibility, also publish to the legacy topic
             # This ensures we're using the exact same format that works in the test
-            success_test = self.mqtt_service.publish_raw("professor/messages", message)
+            success_test = self.mqtt_service.publish_raw(MQTTTopics.LEGACY_FACULTY_MESSAGES, message)
             if success_test:
-                logger.info(f"Successfully published to professor/messages (test method)")
+                logger.info(f"Successfully published to {MQTTTopics.LEGACY_FACULTY_MESSAGES} (backward compatibility)")
             else:
-                logger.error(f"Failed to publish to professor/messages (test method)")
+                logger.error(f"Failed to publish to {MQTTTopics.LEGACY_FACULTY_MESSAGES} (backward compatibility)")
 
             # Log overall success/failure
-            if success or success_alt or success_faculty or success_test:
+            if success or success_legacy or success_faculty or success_test:
                 logger.info(f"Successfully published consultation request {consultation.id} to at least one topic")
             else:
                 logger.error(f"Failed to publish consultation request {consultation.id} to any topic")
@@ -243,7 +244,7 @@ class ConsultationController:
             # Close the database session
             db.close()
 
-            return success or success_alt or success_faculty or success_test
+            return success or success_legacy or success_faculty or success_test
         except Exception as e:
             logger.error(f"Error publishing consultation: {str(e)}")
             return False
@@ -383,8 +384,8 @@ class ConsultationController:
             # Create a test message
             message = f"Test message from ConsultEase central system.\nTimestamp: {datetime.datetime.now().isoformat()}"
 
-            # Publish to faculty-specific topic
-            topic = f"consultease/faculty/{faculty_id}/requests"
+            # Publish to faculty-specific topic using standardized format
+            faculty_requests_topic = MQTTTopics.get_faculty_requests_topic(faculty_id)
             payload = {
                 'id': 0,
                 'student_id': 0,
@@ -400,13 +401,14 @@ class ConsultationController:
             }
 
             # Publish to JSON topic
-            success_json = self.mqtt_service.publish(topic, payload)
+            success_json = self.mqtt_service.publish(faculty_requests_topic, payload)
 
-            # Publish to plain text topic
-            success_text = self.mqtt_service.publish_raw("professor/messages", message)
+            # Publish to legacy plain text topic for backward compatibility
+            success_text = self.mqtt_service.publish_raw(MQTTTopics.LEGACY_FACULTY_MESSAGES, message)
 
             # Publish to faculty-specific plain text topic
-            success_faculty = self.mqtt_service.publish_raw(f"consultease/faculty/{faculty_id}/messages", message)
+            faculty_messages_topic = MQTTTopics.get_faculty_messages_topic(faculty_id)
+            success_faculty = self.mqtt_service.publish_raw(faculty_messages_topic, message)
 
             logger.info(f"Test message sent to faculty desk unit {faculty_id} ({faculty.name})")
             logger.info(f"JSON topic success: {success_json}, Text topic success: {success_text}, Faculty topic success: {success_faculty}")

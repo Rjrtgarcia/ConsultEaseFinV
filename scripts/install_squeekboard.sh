@@ -1,52 +1,90 @@
 #!/bin/bash
+# ConsultEase - Squeekboard Installation Script
+# This script installs and configures squeekboard for the ConsultEase system
 
-# Script to install required on-screen keyboard utilities for ConsultEase
-# This should be run on the Raspberry Pi device
-# Note: This script has been updated to prioritize squeekboard over onboard
+# Exit on error
+set -e
 
-echo "Installing on-screen keyboard utilities for ConsultEase..."
+# Function to display status messages
+status() {
+    echo -e "\033[1;34m[*] $1\033[0m"
+}
 
-# Create scripts directory if it doesn't exist
-mkdir -p "$(dirname "$0")"
+# Function to display success messages
+success() {
+    echo -e "\033[1;32m[✓] $1\033[0m"
+}
 
-# Update package lists
-echo "Updating package lists..."
-sudo apt update
+# Function to display error messages
+error() {
+    echo -e "\033[1;31m[✗] $1\033[0m"
+}
 
-# Try to install squeekboard (preferred)
-echo "Attempting to install squeekboard..."
-if sudo apt install -y squeekboard; then
-    echo "Squeekboard installed successfully."
-else
-    echo "Squeekboard installation failed, trying alternative keyboards..."
+# Function to display warning messages
+warning() {
+    echo -e "\033[1;33m[!] $1\033[0m"
+}
 
-    # Try to install onboard (alternative)
-    if sudo apt install -y onboard; then
-        echo "Onboard installed successfully as fallback."
-    else
-        echo "Onboard installation failed, trying matchbox-keyboard..."
-
-        # Try to install matchbox-keyboard (fallback)
-        if sudo apt install -y matchbox-keyboard; then
-            echo "Matchbox-keyboard installed successfully as fallback."
-        else
-            echo "Failed to install any virtual keyboard. Touch input may be limited."
-        fi
+# Check if running as root
+if [ "$EUID" -eq 0 ]; then
+    warning "Running as root. Some operations may not work correctly with user services."
+    warning "Consider running this script as a regular user with sudo privileges."
+    read -p "Continue anyway? (y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        error "Installation aborted."
+        exit 1
     fi
 fi
 
-# Install other touch-related utilities
-echo "Installing additional touch utilities..."
-sudo apt install -y xserver-xorg-input-evdev
+# Check distribution
+status "Detecting Linux distribution..."
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    DISTRO=$ID
+    VERSION=$VERSION_ID
+    success "Detected distribution: $DISTRO $VERSION_ID"
+else
+    warning "Could not detect distribution, assuming Debian-based"
+    DISTRO="debian"
+fi
 
-# Configure environment for squeekboard
-if command -v squeekboard > /dev/null; then
-    echo "Configuring environment for squeekboard..."
+# Install squeekboard
+status "Checking if squeekboard is installed..."
+if ! command -v squeekboard &> /dev/null; then
+    status "Squeekboard not found, installing..."
+    
+    case $DISTRO in
+        debian|ubuntu|raspbian)
+            sudo apt update
+            sudo apt install -y squeekboard dbus-x11
+            ;;
+        arch|manjaro)
+            sudo pacman -S --noconfirm squeekboard
+            ;;
+        fedora)
+            sudo dnf install -y squeekboard
+            ;;
+        *)
+            error "Unsupported distribution: $DISTRO"
+            error "Please install squeekboard manually and run this script again."
+            exit 1
+            ;;
+    esac
+    
+    success "Squeekboard installed successfully"
+else
+    success "Squeekboard is already installed"
+fi
 
-    # Set environment variables for squeekboard
-    echo "Setting up environment variables..."
-    mkdir -p ~/.config/environment.d/
-    cat > ~/.config/environment.d/consultease-keyboard.conf << EOF
+# Configure environment
+status "Configuring environment for squeekboard..."
+
+# Create environment.d directory if it doesn't exist
+mkdir -p ~/.config/environment.d/
+
+# Create environment configuration file
+cat > ~/.config/environment.d/consultease-keyboard.conf << EOF
 # ConsultEase keyboard environment variables
 GDK_BACKEND=wayland,x11
 QT_QPA_PLATFORM=wayland;xcb
@@ -55,145 +93,112 @@ CONSULTEASE_KEYBOARD=squeekboard
 MOZ_ENABLE_WAYLAND=1
 QT_IM_MODULE=wayland
 CLUTTER_IM_MODULE=wayland
+# Disable onboard
+ONBOARD_DISABLE=1
 EOF
-    echo "Environment variables set for squeekboard."
 
-    # Also add to .bashrc for immediate effect
-    if ! grep -q "CONSULTEASE_KEYBOARD=squeekboard" ~/.bashrc; then
-        echo "Adding environment variables to .bashrc..."
-        cat >> ~/.bashrc << EOF
+# Add to .bashrc for immediate effect
+if ! grep -q "CONSULTEASE_KEYBOARD=squeekboard" ~/.bashrc; then
+    status "Adding environment variables to .bashrc..."
+    cat >> ~/.bashrc << EOF
 
 # ConsultEase keyboard environment variables
 export GDK_BACKEND=wayland,x11
-export QT_QPA_PLATFORM=wayland;xcb
+export QT_QPA_PLATFORM="wayland;xcb"
 export SQUEEKBOARD_FORCE=1
 export CONSULTEASE_KEYBOARD=squeekboard
 export MOZ_ENABLE_WAYLAND=1
 export QT_IM_MODULE=wayland
 export CLUTTER_IM_MODULE=wayland
+# Disable onboard
+export ONBOARD_DISABLE=1
 EOF
-    fi
+fi
 
-    # Create keyboard toggle script
-    echo "Creating keyboard toggle script..."
-    cat > ~/keyboard-toggle.sh << EOF
+# Create keyboard management scripts
+status "Creating keyboard management scripts..."
+
+# Create keyboard toggle script
+cat > ~/keyboard-toggle.sh << EOF
 #!/bin/bash
 # Toggle squeekboard keyboard
 
-# Check if squeekboard is visible
-if dbus-send --print-reply --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.GetVisible | grep -q "boolean true"; then
-    # Hide squeekboard
-    dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:false
-    echo "Squeekboard hidden"
+# Toggle squeekboard using DBus
+if command -v dbus-send &> /dev/null; then
+    # Check current state
+    if dbus-send --print-reply --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.GetVisible | grep -q "boolean true"; then
+        # Hide keyboard
+        dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:false
+        echo "Squeekboard hidden"
+    else
+        # Show keyboard
+        dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
+        echo "Squeekboard shown"
+    fi
 else
-    # Show squeekboard
-    dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
-    echo "Squeekboard shown"
+    echo "DBus not available, cannot toggle squeekboard"
 fi
 EOF
-    chmod +x ~/keyboard-toggle.sh
+chmod +x ~/keyboard-toggle.sh
 
-    # Create keyboard show script
-    echo "Creating keyboard show script..."
-    cat > ~/keyboard-show.sh << EOF
+# Create keyboard show script
+cat > ~/keyboard-show.sh << EOF
 #!/bin/bash
 # Force show squeekboard keyboard
 
-# Make sure squeekboard is running
-if ! pgrep -f squeekboard > /dev/null; then
-    # Start squeekboard with environment variables
-    SQUEEKBOARD_FORCE=1 GDK_BACKEND=wayland,x11 QT_QPA_PLATFORM=wayland squeekboard &
-    sleep 0.5
+# Show squeekboard using DBus
+if command -v dbus-send &> /dev/null; then
+    # Make sure squeekboard is running
+    if ! pgrep -f squeekboard > /dev/null; then
+        # Start squeekboard with environment variables
+        SQUEEKBOARD_FORCE=1 GDK_BACKEND=wayland,x11 QT_QPA_PLATFORM=wayland squeekboard &
+        sleep 0.5
+    fi
+    
+    # Show squeekboard
+    dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
+    echo "Squeekboard shown"
+else
+    echo "DBus not available, cannot show squeekboard"
 fi
-
-# Show squeekboard
-dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:true
-echo "Squeekboard shown"
 EOF
-    chmod +x ~/keyboard-show.sh
+chmod +x ~/keyboard-show.sh
 
-    # Create keyboard hide script
-    echo "Creating keyboard hide script..."
-    cat > ~/keyboard-hide.sh << EOF
+# Create keyboard hide script
+cat > ~/keyboard-hide.sh << EOF
 #!/bin/bash
 # Force hide squeekboard keyboard
 
-# Hide squeekboard
-dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:false
-echo "Squeekboard hidden"
-EOF
-    chmod +x ~/keyboard-hide.sh
+# Hide squeekboard using DBus
+if command -v dbus-send &> /dev/null; then
+    dbus-send --type=method_call --dest=sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0.SetVisible boolean:false
+    echo "Squeekboard hidden"
+else
+    echo "DBus not available, cannot hide squeekboard"
 fi
-
-# Configure auto-start for onboard (if squeekboard is not available but onboard is)
-if ! command -v squeekboard > /dev/null && command -v onboard > /dev/null; then
-    echo "Squeekboard not found but onboard is available. Configuring onboard as fallback..."
-    mkdir -p ~/.config/autostart
-    cat > ~/.config/autostart/onboard-autostart.desktop << EOF
-[Desktop Entry]
-Type=Application
-Name=Onboard
-Exec=onboard --size=small --layout=Phone --enable-background-transparency --theme=Nightshade
-Comment=Flexible on-screen keyboard
 EOF
-    echo "Onboard configured for auto-start as fallback."
+chmod +x ~/keyboard-hide.sh
 
-    # Create onboard configuration directory
-    mkdir -p ~/.config/onboard
-
-    # Create onboard configuration file with touch-friendly settings
-    cat > ~/.config/onboard/onboard.conf << EOF
-[main]
-layout=Phone
-theme=Nightshade
-key-size=small
-enable-background-transparency=true
-show-status-icon=true
-start-minimized=false
-show-tooltips=false
-auto-show=true
-auto-show-delay=500
-auto-hide=true
-auto-hide-delay=1000
-xembed-onboard=true
-enable-touch-input=true
-touch-feedback-enabled=true
-touch-feedback-size=small
-EOF
-    echo "Onboard configured with touch-friendly settings."
-fi
-
-# Create .env file for ConsultEase if it doesn't exist
-if [ -d "../central_system" ]; then
-    echo "Creating/updating .env file for ConsultEase..."
-    if [ ! -f "../.env" ]; then
-        cat > "../.env" << EOF
-# ConsultEase Configuration
-# Generated by install_squeekboard.sh on $(date)
-
-# Keyboard Configuration
-CONSULTEASE_KEYBOARD=squeekboard
-SQUEEKBOARD_FORCE=1
-EOF
-    else
-        # Update existing .env file
-        if grep -q "CONSULTEASE_KEYBOARD=" "../.env"; then
-            sed -i 's/CONSULTEASE_KEYBOARD=.*/CONSULTEASE_KEYBOARD=squeekboard/' "../.env"
-        else
-            echo "CONSULTEASE_KEYBOARD=squeekboard" >> "../.env"
-        fi
-
-        if grep -q "SQUEEKBOARD_FORCE=" "../.env"; then
-            sed -i 's/SQUEEKBOARD_FORCE=.*/SQUEEKBOARD_FORCE=1/' "../.env"
-        else
-            echo "SQUEEKBOARD_FORCE=1" >> "../.env"
-        fi
-
-        if grep -q "SQUEEKBOARD_DISABLE=" "../.env"; then
-            sed -i 's/SQUEEKBOARD_DISABLE=.*/SQUEEKBOARD_DISABLE=0/' "../.env"
-        fi
+# Enable and start squeekboard service
+status "Enabling squeekboard service..."
+if command -v systemctl &> /dev/null; then
+    systemctl --user enable squeekboard.service 2>/dev/null || true
+    systemctl --user start squeekboard.service 2>/dev/null || true
+    success "Squeekboard service enabled and started"
+else
+    warning "systemctl not found, could not enable squeekboard service"
+    # Start squeekboard manually
+    if ! pgrep -f squeekboard > /dev/null; then
+        SQUEEKBOARD_FORCE=1 GDK_BACKEND=wayland,x11 QT_QPA_PLATFORM=wayland squeekboard &
+        success "Started squeekboard manually"
     fi
 fi
 
-echo "Installation completed."
-echo "You may need to reboot your Raspberry Pi for all changes to take effect."
+success "Squeekboard installation and configuration complete!"
+echo
+echo "To use the keyboard:"
+echo "- Toggle: ~/keyboard-toggle.sh"
+echo "- Show: ~/keyboard-show.sh"
+echo "- Hide: ~/keyboard-hide.sh"
+echo
+echo "You may need to restart your session for all changes to take effect."

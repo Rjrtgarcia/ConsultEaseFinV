@@ -58,18 +58,23 @@ class BaseWindow(QMainWindow):
         self.statusBar().setStyleSheet("QStatusBar { border-top: 1px solid #cccccc; }")
 
         # Create keyboard toggle button with icon if available
-        self.keyboard_toggle_button = QPushButton("Keyboard")
-        self.keyboard_toggle_button.setFixedSize(100, 30)
+        self.keyboard_toggle_button = QPushButton("⌨ Keyboard")
+        self.keyboard_toggle_button.setFixedSize(140, 40)
         self.keyboard_toggle_button.setStyleSheet("""
             QPushButton {
-                background-color: #0d3b66;
-                color: white;
-                border-radius: 4px;
-                padding: 4px 8px;
+                background-color: #f4d35e;  /* Gold accent color for visibility */
+                color: #0d3b66;  /* Dark blue text for contrast */
+                border-radius: 6px;
+                padding: 6px 10px;
                 font-weight: bold;
+                font-size: 12pt;
+                border: 2px solid #0d3b66;  /* Border for better visibility */
             }
             QPushButton:hover {
-                background-color: #1a4b7c;
+                background-color: #f7e07e;  /* Lighter gold on hover */
+            }
+            QPushButton:pressed {
+                background-color: #e6c54a;  /* Darker gold when pressed */
             }
         """)
 
@@ -216,13 +221,13 @@ class BaseWindow(QMainWindow):
                     direct_keyboard.hide_keyboard()
                     # Update button text
                     if hasattr(self, 'keyboard_toggle_button'):
-                        self.keyboard_toggle_button.setText("Show Keyboard")
+                        self.keyboard_toggle_button.setText("⌨ Show Keyboard")
                 else:
                     logger.info("Manually showing keyboard via direct integration")
                     direct_keyboard.show_keyboard()
                     # Update button text
                     if hasattr(self, 'keyboard_toggle_button'):
-                        self.keyboard_toggle_button.setText("Hide Keyboard")
+                        self.keyboard_toggle_button.setText("⌨ Hide Keyboard")
                 return
 
         # Method 2: Use keyboard handler
@@ -243,13 +248,13 @@ class BaseWindow(QMainWindow):
                 keyboard_handler.hide_keyboard()
                 # Update button text
                 if hasattr(self, 'keyboard_toggle_button'):
-                    self.keyboard_toggle_button.setText("Show Keyboard")
+                    self.keyboard_toggle_button.setText("⌨ Show Keyboard")
             else:
                 logger.info("Manually showing keyboard via keyboard handler")
                 keyboard_handler.force_show_keyboard()
                 # Update button text
                 if hasattr(self, 'keyboard_toggle_button'):
-                    self.keyboard_toggle_button.setText("Hide Keyboard")
+                    self.keyboard_toggle_button.setText("⌨ Hide Keyboard")
             return
 
         # Method 3: Direct DBus call for squeekboard (fallback)
@@ -278,7 +283,7 @@ class BaseWindow(QMainWindow):
                         logger.info("Manually hiding squeekboard via direct DBus call")
                         # Update button text
                         if hasattr(self, 'keyboard_toggle_button'):
-                            self.keyboard_toggle_button.setText("Show Keyboard")
+                            self.keyboard_toggle_button.setText("⌨ Show Keyboard")
                     else:
                         # Show squeekboard
                         show_cmd = [
@@ -289,7 +294,7 @@ class BaseWindow(QMainWindow):
                         logger.info("Manually showing squeekboard via direct DBus call")
                         # Update button text
                         if hasattr(self, 'keyboard_toggle_button'):
-                            self.keyboard_toggle_button.setText("Hide Keyboard")
+                            self.keyboard_toggle_button.setText("⌨ Hide Keyboard")
                     return
                 except Exception as e:
                     logger.error(f"Error toggling squeekboard via DBus: {e}")
@@ -376,10 +381,10 @@ class BaseWindow(QMainWindow):
             # Update button text based on keyboard visibility
             if hasattr(keyboard_handler, 'keyboard_visible') and keyboard_handler.keyboard_visible:
                 if hasattr(self, 'keyboard_toggle_button'):
-                    self.keyboard_toggle_button.setText("Hide Keyboard")
+                    self.keyboard_toggle_button.setText("⌨ Hide Keyboard")
             else:
                 if hasattr(self, 'keyboard_toggle_button'):
-                    self.keyboard_toggle_button.setText("Show Keyboard")
+                    self.keyboard_toggle_button.setText("⌨ Show Keyboard")
 
         # Log keyboard initialization
         logger.info(f"Keyboard initialized for window: {self.__class__.__name__}")

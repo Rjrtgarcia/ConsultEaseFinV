@@ -10,8 +10,11 @@ import os
 import logging
 from .base_window import BaseWindow
 from ..controllers import FacultyController
-from ..models import Student, get_db
+from ..models import Student, get_db, Faculty
 from ..services import get_rfid_service
+from ..utils.input_sanitizer import (
+    sanitize_string, sanitize_email, sanitize_filename, sanitize_path, sanitize_boolean
+)
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -247,14 +250,41 @@ class FacultyManagementTab(QWidget):
         """
         Show dialog to add a new faculty member.
         """
-        dialog = FacultyDialog()
+        dialog = FacultyDialog(parent=self)
+
+        # Ensure dialog appears on top
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
         if dialog.exec_() == QDialog.Accepted:
             try:
-                name = dialog.name_input.text().strip()
-                department = dialog.department_input.text().strip()
-                email = dialog.email_input.text().strip()
-                ble_id = dialog.ble_id_input.text().strip()
+                # Sanitize inputs
+                name = sanitize_string(dialog.name_input.text(), max_length=100)
+                department = sanitize_string(dialog.department_input.text(), max_length=100)
+                email = sanitize_email(dialog.email_input.text())
+                ble_id = sanitize_string(dialog.ble_id_input.text(), max_length=50)
                 image_path = dialog.image_path
+
+                # Validate inputs
+                if not name:
+                    raise ValueError("Faculty name cannot be empty")
+
+                if not department:
+                    raise ValueError("Department cannot be empty")
+
+                if not email:
+                    raise ValueError("Email is required and must be valid")
+
+                # Validate name and email using Faculty model validation
+                if not Faculty.validate_name(name):
+                    raise ValueError("Invalid faculty name format")
+
+                if not Faculty.validate_email(email):
+                    raise ValueError("Invalid email format")
+
+                if ble_id and not Faculty.validate_ble_id(ble_id):
+                    raise ValueError("Invalid BLE ID format")
 
                 # Process image if provided
                 if image_path:
@@ -268,9 +298,13 @@ class FacultyManagementTab(QWidget):
                     if not os.path.exists(images_dir):
                         os.makedirs(images_dir)
 
-                    # Generate a unique filename
-                    filename = f"{email.split('@')[0]}_{os.path.basename(image_path)}"
-                    dest_path = os.path.join(images_dir, filename)
+                    # Sanitize and generate a unique filename
+                    safe_email_prefix = sanitize_filename(email.split('@')[0])
+                    safe_basename = sanitize_filename(os.path.basename(image_path))
+                    filename = f"{safe_email_prefix}_{safe_basename}"
+
+                    # Ensure the destination path is safe
+                    dest_path = sanitize_path(os.path.join(images_dir, filename), base_dir)
 
                     # Copy the image file
                     shutil.copy2(image_path, dest_path)
@@ -281,7 +315,7 @@ class FacultyManagementTab(QWidget):
                     image_path = None
 
                 # Get always available flag
-                always_available = dialog.always_available_checkbox.isChecked()
+                always_available = sanitize_boolean(dialog.always_available_checkbox.isChecked())
 
                 # Add faculty using controller
                 faculty = self.faculty_controller.add_faculty(name, department, email, ble_id, image_path, always_available)
@@ -293,6 +327,9 @@ class FacultyManagementTab(QWidget):
                 else:
                     QMessageBox.warning(self, "Add Faculty", "Failed to add faculty. This email or BLE ID may already be in use.")
 
+            except ValueError as e:
+                logger.error(f"Validation error adding faculty: {str(e)}")
+                QMessageBox.warning(self, "Input Error", str(e))
             except Exception as e:
                 logger.error(f"Error adding faculty: {str(e)}")
                 QMessageBox.warning(self, "Add Faculty", f"Error adding faculty: {str(e)}")
@@ -317,8 +354,8 @@ class FacultyManagementTab(QWidget):
             QMessageBox.warning(self, "Edit Faculty", f"Faculty with ID {faculty_id} not found.")
             return
 
-        # Create and populate dialog
-        dialog = FacultyDialog(faculty_id=faculty_id)
+        # Create and populate dialog with this tab as parent
+        dialog = FacultyDialog(faculty_id=faculty_id, parent=self)
         dialog.name_input.setText(faculty.name)
         dialog.department_input.setText(faculty.department)
         dialog.email_input.setText(faculty.email)
@@ -329,6 +366,11 @@ class FacultyManagementTab(QWidget):
         if faculty.image_path:
             dialog.image_path = faculty.get_image_path()
             dialog.image_path_input.setText(faculty.image_path)
+
+        # Ensure dialog appears on top
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
         if dialog.exec_() == QDialog.Accepted:
             try:
@@ -430,6 +472,11 @@ class FacultyDialog(QDialog):
         super().__init__(parent)
         self.faculty_id = faculty_id
         self.image_path = None
+
+        # Set window flags to ensure dialog stays on top and has proper modal behavior
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        self.setWindowModality(Qt.ApplicationModal)
+
         self.init_ui()
 
     def init_ui(self):
@@ -666,7 +713,14 @@ class StudentManagementTab(QWidget):
         # Import all necessary modules at the top level
         import traceback
 
-        dialog = StudentDialog()
+        # Create dialog with this tab as the parent
+        dialog = StudentDialog(parent=self)
+
+        # Ensure dialog appears on top
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
         if dialog.exec_() == QDialog.Accepted:
             try:
                 name = dialog.name_input.text().strip()
@@ -775,12 +829,17 @@ class StudentManagementTab(QWidget):
                 QMessageBox.warning(self, "Edit Student", f"Student with ID {student_id} not found.")
                 return
 
-            # Create and populate dialog
-            dialog = StudentDialog(student_id=student_id)
+            # Create and populate dialog with this tab as the parent
+            dialog = StudentDialog(student_id=student_id, parent=self)
             dialog.name_input.setText(student.name)
             dialog.department_input.setText(student.department)
             dialog.rfid_input.setText(student.rfid_uid)
             dialog.rfid_uid = student.rfid_uid
+
+            # Ensure dialog appears on top
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
 
             if dialog.exec_() == QDialog.Accepted:
                 name = dialog.name_input.text().strip()
@@ -967,8 +1026,13 @@ class StudentManagementTab(QWidget):
         """
         Scan RFID card for student registration.
         """
-        dialog = RFIDScanDialog(self.rfid_service)
+        dialog = RFIDScanDialog(self.rfid_service, parent=self)
         self.scan_dialog = dialog
+
+        # Ensure dialog appears on top
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
         if dialog.exec_() == QDialog.Accepted:
             rfid_uid = dialog.get_rfid_uid()
@@ -1002,10 +1066,15 @@ class StudentManagementTab(QWidget):
                         )
 
                         if reply == QMessageBox.Yes:
-                            # Pre-fill the RFID field in the student dialog
-                            dialog = StudentDialog()
+                            # Pre-fill the RFID field in the student dialog with this as parent
+                            dialog = StudentDialog(parent=self)
                             dialog.rfid_uid = rfid_uid
                             dialog.rfid_input.setText(rfid_uid)
+
+                            # Ensure dialog appears on top
+                            dialog.show()
+                            dialog.raise_()
+                            dialog.activateWindow()
 
                             if dialog.exec_() == QDialog.Accepted:
                                 try:
@@ -1030,10 +1099,15 @@ class StudentDialog(QDialog):
     Dialog for adding or editing students.
     """
     def __init__(self, student_id=None, parent=None):
+        # Ensure parent is properly set
         super().__init__(parent)
         self.student_id = student_id
         self.rfid_uid = ""
         self.rfid_service = get_rfid_service()
+
+        # Set window flags to ensure dialog stays on top and has proper modal behavior
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        self.setWindowModality(Qt.ApplicationModal)
 
         # Track if we're currently scanning
         self.is_scanning = False
@@ -1119,8 +1193,13 @@ class StudentDialog(QDialog):
             self.rfid_service.register_callback(self.scan_callback)
             self.is_scanning = True
 
-            # Create and show the dialog
-            self.rfid_scan_dialog = RFIDScanDialog(self.rfid_service)
+            # Create and show the dialog with this dialog as parent
+            self.rfid_scan_dialog = RFIDScanDialog(self.rfid_service, parent=self)
+
+            # Ensure dialog appears on top
+            self.rfid_scan_dialog.show()
+            self.rfid_scan_dialog.raise_()
+            self.rfid_scan_dialog.activateWindow()
 
             # Wait for the dialog to complete
             result = self.rfid_scan_dialog.exec_()
@@ -1184,9 +1263,14 @@ class RFIDScanDialog(QDialog):
     Dialog for RFID card scanning.
     """
     def __init__(self, rfid_service=None, parent=None):
+        # Ensure parent is properly set
         super().__init__(parent)
         self.rfid_uid = ""
         self.rfid_service = rfid_service or get_rfid_service()
+
+        # Set window flags to ensure dialog stays on top and has proper modal behavior
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        self.setWindowModality(Qt.ApplicationModal)
 
         # Track whether we've received a scan
         self.scan_received = False

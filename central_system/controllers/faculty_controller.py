@@ -3,6 +3,7 @@ import datetime
 from sqlalchemy import or_
 from ..services import get_mqtt_service
 from ..models import Faculty, get_db
+from ..utils.mqtt_topics import MQTTTopics
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -26,15 +27,15 @@ class FacultyController:
         """
         logger.info("Starting Faculty controller")
 
-        # Subscribe to faculty status updates
+        # Subscribe to faculty status updates using standardized topic
         self.mqtt_service.register_topic_handler(
             "consultease/faculty/+/status",
             self.handle_faculty_status_update
         )
 
-        # Subscribe to faculty desk unit status updates
+        # Subscribe to legacy faculty desk unit status updates for backward compatibility
         self.mqtt_service.register_topic_handler(
-            "professor/status",
+            MQTTTopics.LEGACY_FACULTY_STATUS,
             self.handle_faculty_status_update
         )
 
@@ -81,48 +82,103 @@ class FacultyController:
         """
         faculty_id = None
         status = None
+        faculty_name = None
 
         # Handle different topic formats
-        if topic == "professor/status":
-            # This is from the faculty desk unit
+        if topic == MQTTTopics.LEGACY_FACULTY_STATUS:
+            # This is from the faculty desk unit using the legacy topic
             # Check if this is a string message (keychain_connected or keychain_disconnected)
             if isinstance(data, str):
                 if data == "keychain_connected":
                     status = True
-                    # Use faculty ID from the client ID (DeskUnit_Jeysibn)
-                    # Find faculty with name "Jeysibn"
+                    # Extract faculty name from client ID (DeskUnit_FacultyName)
+                    # This is more flexible than hardcoding a specific faculty name
                     db = get_db()
-                    faculty = db.query(Faculty).filter(Faculty.name == "Jeysibn").first()
+
+                    # Try to find the faculty from the MQTT client ID if available
+                    # If not available, look for faculty with BLE beacons configured
+                    faculty = None
+
+                    # First, try to find any faculty with BLE configured and status=False
+                    # This assumes the BLE connection is for a faculty that was previously disconnected
+                    faculty = db.query(Faculty).filter(
+                        Faculty.ble_id.isnot(None),
+                        Faculty.status == False
+                    ).first()
+
                     if faculty:
                         faculty_id = faculty.id
-                        logger.info(f"BLE beacon connected for faculty desk unit (ID: {faculty_id}, Name: Jeysibn)")
+                        faculty_name = faculty.name
+                        logger.info(f"BLE beacon connected for faculty desk unit (ID: {faculty_id}, Name: {faculty_name})")
                     else:
-                        logger.error("Faculty 'Jeysibn' not found in database")
-                        return
+                        # If no disconnected faculty found, look for any faculty with BLE configured
+                        faculty = db.query(Faculty).filter(
+                            Faculty.ble_id.isnot(None)
+                        ).first()
+
+                        if faculty:
+                            faculty_id = faculty.id
+                            faculty_name = faculty.name
+                            logger.info(f"BLE beacon connected for faculty desk unit (ID: {faculty_id}, Name: {faculty_name})")
+                        else:
+                            logger.error("No faculty with BLE configuration found in database")
+                            return
                 elif data == "keychain_disconnected":
                     status = False
-                    # Use faculty ID from the client ID (DeskUnit_Jeysibn)
-                    # Find faculty with name "Jeysibn"
+                    # Similar approach as above for finding the faculty
                     db = get_db()
-                    faculty = db.query(Faculty).filter(Faculty.name == "Jeysibn").first()
+
+                    # First, try to find any faculty with BLE configured and status=True
+                    # This assumes the BLE disconnection is for a faculty that was previously connected
+                    faculty = db.query(Faculty).filter(
+                        Faculty.ble_id.isnot(None),
+                        Faculty.status == True
+                    ).first()
+
                     if faculty:
                         faculty_id = faculty.id
-                        logger.info(f"BLE beacon disconnected for faculty desk unit (ID: {faculty_id}, Name: Jeysibn)")
+                        faculty_name = faculty.name
+                        logger.info(f"BLE beacon disconnected for faculty desk unit (ID: {faculty_id}, Name: {faculty_name})")
                     else:
-                        logger.error("Faculty 'Jeysibn' not found in database")
-                        return
+                        # If no connected faculty found, look for any faculty with BLE configured
+                        faculty = db.query(Faculty).filter(
+                            Faculty.ble_id.isnot(None)
+                        ).first()
+
+                        if faculty:
+                            faculty_id = faculty.id
+                            faculty_name = faculty.name
+                            logger.info(f"BLE beacon disconnected for faculty desk unit (ID: {faculty_id}, Name: {faculty_name})")
+                        else:
+                            logger.error("No faculty with BLE configuration found in database")
+                            return
             else:
                 # This is a JSON message
                 status = data.get('status', False)
                 faculty_id = data.get('faculty_id')
-                if faculty_id is None:
-                    # Find faculty with name "Jeysibn"
+                faculty_name = data.get('faculty_name')
+
+                if faculty_id is None and faculty_name is not None:
+                    # Try to find faculty by name
                     db = get_db()
-                    faculty = db.query(Faculty).filter(Faculty.name == "Jeysibn").first()
+                    faculty = db.query(Faculty).filter(Faculty.name == faculty_name).first()
                     if faculty:
                         faculty_id = faculty.id
                     else:
-                        logger.error("Faculty 'Jeysibn' not found in database")
+                        logger.error(f"Faculty '{faculty_name}' not found in database")
+                        return
+                elif faculty_id is None:
+                    # No faculty ID or name provided, try to find any faculty with BLE configured
+                    db = get_db()
+                    faculty = db.query(Faculty).filter(
+                        Faculty.ble_id.isnot(None)
+                    ).first()
+
+                    if faculty:
+                        faculty_id = faculty.id
+                        faculty_name = faculty.name
+                    else:
+                        logger.error("No faculty with BLE configuration found in database")
                         return
         else:
             # Extract faculty ID from topic (e.g., "consultease/faculty/123/status")
@@ -140,6 +196,7 @@ class FacultyController:
             # Get status from data
             if isinstance(data, dict):
                 status = data.get('status', False)
+                faculty_name = data.get('faculty_name')
 
                 # Check if this is a BLE beacon status update
                 if 'keychain_connected' in data:
@@ -166,7 +223,7 @@ class FacultyController:
             # Notify callbacks
             self._notify_callbacks(faculty)
 
-            # Publish a notification about faculty availability
+            # Publish a notification about faculty availability using standardized topic
             try:
                 notification = {
                     'type': 'faculty_status',
@@ -175,7 +232,7 @@ class FacultyController:
                     'status': status,
                     'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
                 }
-                self.mqtt_service.publish('consultease/system/notifications', notification)
+                self.mqtt_service.publish(MQTTTopics.SYSTEM_NOTIFICATIONS, notification)
             except Exception as e:
                 logger.error(f"Error publishing faculty status notification: {str(e)}")
 
@@ -198,13 +255,8 @@ class FacultyController:
                 logger.error(f"Faculty not found: {faculty_id}")
                 return None
 
-            # If faculty is set to always available, don't change status to unavailable
-            if faculty.always_available and not status:
-                logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) is set to always available, ignoring unavailable status update")
-                # Still update last_seen timestamp
-                faculty.last_seen = datetime.datetime.now()
-                db.commit()
-                return faculty
+            # Always update status based on BLE connection
+            # The always_available flag is no longer used
 
             # Otherwise, update status normally
             faculty.status = status
@@ -307,7 +359,7 @@ class FacultyController:
             email (str): Faculty email
             ble_id (str): Faculty BLE beacon ID
             image_path (str, optional): Path to faculty image
-            always_available (bool, optional): Whether the faculty is always available
+            always_available (bool, optional): Deprecated parameter, no longer used
 
         Returns:
             Faculty: New faculty object or None if error
@@ -334,8 +386,8 @@ class FacultyController:
                 email=email,
                 ble_id=ble_id,
                 image_path=image_path,
-                status=always_available,  # If always available, set initial status to True
-                always_available=always_available
+                status=False,  # Initial status is False, will be updated by BLE
+                always_available=False  # Always set to False
             )
 
             db.add(faculty)
@@ -343,20 +395,19 @@ class FacultyController:
 
             logger.info(f"Added new faculty: {faculty.name} (ID: {faculty.id})")
 
-            # If faculty is set to always available, publish a status update
-            if always_available:
-                logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) is set to always available")
-                try:
-                    notification = {
-                        'type': 'faculty_status',
-                        'faculty_id': faculty.id,
-                        'faculty_name': faculty.name,
-                        'status': True,
-                        'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
-                    }
-                    self.mqtt_service.publish('consultease/system/notifications', notification)
-                except Exception as e:
-                    logger.error(f"Error publishing faculty status notification: {str(e)}")
+            # Publish a notification about the new faculty
+            logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) created with BLE-based availability")
+            try:
+                notification = {
+                    'type': 'faculty_status',
+                    'faculty_id': faculty.id,
+                    'faculty_name': faculty.name,
+                    'status': faculty.status,
+                    'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
+                }
+                self.mqtt_service.publish(MQTTTopics.SYSTEM_NOTIFICATIONS, notification)
+            except Exception as e:
+                logger.error(f"Error publishing faculty status notification: {str(e)}")
 
             return faculty
         except Exception as e:
@@ -374,7 +425,7 @@ class FacultyController:
             email (str, optional): New faculty email
             ble_id (str, optional): New faculty BLE beacon ID
             image_path (str, optional): New faculty image path
-            always_available (bool, optional): Whether the faculty is always available
+            always_available (bool, optional): Deprecated parameter, no longer used
 
         Returns:
             Faculty: Updated faculty object or None if error
@@ -413,33 +464,11 @@ class FacultyController:
             if image_path is not None:
                 faculty.image_path = image_path
 
-            # Update always_available flag if provided
-            if always_available is not None and always_available != faculty.always_available:
-                old_always_available = faculty.always_available
-                faculty.always_available = always_available
-
-                # If changing to always available, set status to True
-                if always_available and not faculty.status:
-                    faculty.status = True
-                    logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) set to always available, status updated to Available")
-
-                    # Publish status update
-                    try:
-                        notification = {
-                            'type': 'faculty_status',
-                            'faculty_id': faculty.id,
-                            'faculty_name': faculty.name,
-                            'status': True,
-                            'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
-                        }
-                        self.mqtt_service.publish('consultease/system/notifications', notification)
-                    except Exception as e:
-                        logger.error(f"Error publishing faculty status notification: {str(e)}")
-
-                # If changing from always available to not always available, don't change status
-                # The status will be updated based on BLE beacon events
-                if old_always_available and not always_available:
-                    logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) no longer always available, status will be updated based on BLE beacon events")
+            # Set always_available to False regardless of input
+            # Status is always determined by BLE connection
+            if faculty.always_available:
+                faculty.always_available = False
+                logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) status will be determined by BLE connection")
 
             db.commit()
 

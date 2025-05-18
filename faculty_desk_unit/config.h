@@ -22,6 +22,7 @@
 #define FACULTY_ID 3  // This should match the faculty ID in the database
 #define FACULTY_NAME "Jeysibn"  // This should match the faculty name in the database
 #define FACULTY_DEPARTMENT "Computer Science"  // This should match the faculty department in the database
+#define ALWAYS_AVAILABLE false  // Set to false to make faculty availability depend on BLE connection
 
 // BLE Configuration
 #define BLE_SCAN_INTERVAL 5000  // Scan interval in milliseconds
@@ -46,10 +47,20 @@
 #define TFT_ACCENT   NU_GOLD         // Accent color
 #define TFT_HIGHLIGHT NU_LIGHTGOLD   // Highlight color
 
-// MQTT Topics
+// MQTT Topics - Standardized format
 #define MQTT_TOPIC_STATUS "consultease/faculty/%d/status"  // %d will be replaced with FACULTY_ID
 #define MQTT_TOPIC_REQUESTS "consultease/faculty/%d/requests"  // %d will be replaced with FACULTY_ID
+#define MQTT_TOPIC_MESSAGES "consultease/faculty/%d/messages"  // %d will be replaced with FACULTY_ID
 #define MQTT_TOPIC_NOTIFICATIONS "consultease/system/notifications"
+
+// Legacy MQTT Topics - For backward compatibility
+#define MQTT_LEGACY_STATUS "professor/status"
+#define MQTT_LEGACY_MESSAGES "professor/messages"
+
+// BLE Connection Stability
+#define BLE_CONNECTION_TIMEOUT 30000  // Time in ms to consider BLE disconnected if no signal (30 seconds)
+#define BLE_RECONNECT_ATTEMPTS 3      // Number of reconnection attempts before giving up
+#define BLE_RECONNECT_DELAY 5000      // Delay between reconnection attempts in ms
 
 // Debug Configuration
 #define DEBUG_ENABLED true  // Set to false to disable debug output

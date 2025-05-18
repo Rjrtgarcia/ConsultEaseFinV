@@ -15,9 +15,10 @@ A comprehensive system for enhanced student-faculty interaction, featuring RFID-
 
 ### Faculty Desk Unit (ESP32)
 - 2.4" TFT Display for consultation requests
-- BLE-based presence detection (with always-on option)
+- BLE-based presence detection (configurable always-available mode)
 - MQTT communication with Central System
 - Real-time status updates
+- Improved reliability and error handling
 
 ## Requirements
 
@@ -52,11 +53,16 @@ sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE consultease TO piuser
 
 3. Install touchscreen utilities (for Raspberry Pi):
 ```bash
-sudo chmod +x scripts/install_squeekboard.sh
-sudo ./scripts/install_squeekboard.sh
+sudo chmod +x scripts/keyboard_setup.sh
+sudo ./scripts/keyboard_setup.sh
 ```
 
-Note: The system now prefers squeekboard over onboard for the on-screen keyboard functionality.
+Note: The system now uses a unified keyboard setup script that supports both squeekboard and onboard, with automatic fallback. Squeekboard is preferred for mobile-friendly environments, while onboard is used as a fallback. You can also install squeekboard directly:
+
+```bash
+sudo chmod +x scripts/install_squeekboard.sh
+./scripts/install_squeekboard.sh
+```
 
 4. Calibrate the touchscreen (if needed):
 ```bash
@@ -92,9 +98,19 @@ python central_system/main.py
 
 4. Upload the sketch to your ESP32
 
-5. Test the faculty desk unit using the provided test scripts:
+5. Test the faculty desk unit using the unified test utility:
    ```bash
-   python scripts/test_ble_connection.py test
+   # Test MQTT communication with faculty desk unit
+   python scripts/test_utility.py mqtt-test --broker 192.168.1.100
+
+   # Send a test message to faculty desk unit
+   python scripts/test_utility.py faculty-desk --faculty-id 3 --message "Test message"
+
+   # Simulate a BLE beacon for faculty presence detection
+   python scripts/test_utility.py ble-beacon --faculty-id 2
+
+   # Monitor all MQTT messages on the broker
+   python scripts/test_utility.py monitor --broker 192.168.1.100
    ```
 
 ## Development
@@ -114,16 +130,18 @@ consultease/
 │   ├── config.h              # Configuration file
 │   └── ble_beacon/           # BLE beacon firmware
 ├── scripts/                  # Utility scripts
-│   ├── install_squeekboard.sh # Install on-screen keyboard
+│   ├── keyboard_setup.sh     # Unified on-screen keyboard setup
 │   ├── calibrate_touch.sh    # Touchscreen calibration utility
 │   ├── enable_fullscreen.py  # Enable fullscreen for deployment
-│   ├── test_ble_connection.py # Test BLE functionality
+│   ├── install_squeekboard.sh # Install and configure squeekboard
+│   ├── test_utility.py       # Unified testing utility for all components
 │   └── test_ui_improvements.py # Test UI improvements
 ├── tests/                    # Test suite
 └── docs/                     # Documentation
     ├── deployment_guide.md   # Comprehensive deployment guide
     ├── quick_start_guide.md  # Quick start instructions
     ├── user_manual.md        # User manual
+    ├── keyboard_setup.md     # On-screen keyboard setup guide
     └── recent_improvements.md # Documentation of recent changes
 ```
 
@@ -131,14 +149,14 @@ consultease/
 
 ConsultEase includes several features to enhance usability on touchscreen devices:
 
-- **Auto-popup keyboard**: Virtual keyboard (squeekboard) appears automatically when text fields receive focus
+- **Auto-popup keyboard**: Virtual keyboard (squeekboard or onboard) appears automatically when text fields receive focus
 - **Fullscreen mode**: Optimized for touchscreen deployment with full screen utilization
 - **Touch calibration**: Tools to ensure accurate touch input recognition
 - **Touch-friendly UI**: Larger buttons and input elements optimized for touch interaction
 - **Smooth transitions**: Enhanced UI transitions between screens for better user experience
 - **Improved consultation panel**: Better readability and user feedback in the consultation interface
 
-See the user manual and deployment guide in the `docs/` directory for detailed instructions on touchscreen setup and optimization.
+See the user manual, deployment guide, and keyboard setup guide in the `docs/` directory for detailed instructions on touchscreen setup and optimization.
 
 ## RFID Troubleshooting
 

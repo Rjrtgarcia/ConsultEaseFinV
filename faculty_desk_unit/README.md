@@ -74,18 +74,27 @@ You can also use the older test scripts in the `test_scripts` directory:
 ## Usage
 
 1. The unit will automatically connect to WiFi and the MQTT broker
-2. It will act as a BLE server, but simulates an always-connected BLE client
-3. The faculty status is always set to "Available" (BLE always on)
-4. The unit will periodically send "keychain_connected" messages to maintain the available status
+2. It will act as a BLE server waiting for BLE client connections
+3. When a BLE client (faculty keychain) connects, the faculty status is set to "Available"
+4. When the BLE client disconnects, the faculty status is set to "Unavailable"
 5. Consultation requests from students will appear on the display
 
-### BLE Always-On Feature
+### BLE Always-Available Feature (Optional)
 
-This version of the faculty desk unit simulates an always-connected BLE client, which means:
-- The faculty status is always shown as "Available" in the central system
+The faculty desk unit includes an optional "Always Available" mode that can be enabled in the config.h file:
+
+```cpp
+// Set to true to make faculty always appear as available regardless of BLE connection
+#define ALWAYS_AVAILABLE true
+```
+
+When this feature is enabled:
+- The faculty status is always shown as "Available" in the central system regardless of BLE connection
 - The unit will still accept real BLE client connections, but won't change status when they disconnect
 - Every 5 minutes, the unit sends a "keychain_connected" message to ensure the faculty remains available
 - This feature is useful for faculty members who want to be always available for consultations
+
+By default, this feature is disabled (set to `false`), meaning the faculty status will accurately reflect the actual BLE connection status.
 
 ### Database Integration
 

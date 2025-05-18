@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QPushButton, QGridLayout, QScrollArea, QFrame,
                                QLineEdit, QTextEdit, QComboBox, QMessageBox,
-                               QSplitter, QApplication)
+                               QSplitter, QApplication, QSizePolicy)
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSize
 from PyQt5.QtGui import QIcon, QColor, QPixmap
 
@@ -29,7 +29,10 @@ class FacultyCard(QFrame):
         Initialize the faculty card UI.
         """
         self.setFrameShape(QFrame.StyledPanel)
-        self.setFixedSize(300, 250)  # Increased height to accommodate image
+
+        # Use minimum size instead of fixed size for better responsiveness
+        self.setMinimumSize(250, 200)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
 
         # Set styling based on faculty status
         self.update_style()
@@ -367,20 +370,23 @@ class DashboardWindow(BaseWindow):
         welcome_label.setStyleSheet("font-size: 24pt; font-weight: bold;")
         header_layout.addWidget(welcome_label)
 
-        # Logout button - smaller size
+        # Logout button - smaller size as per user preference
         logout_button = QPushButton("Logout")
-        logout_button.setFixedSize(80, 30)
+        logout_button.setFixedSize(50, 22)  # Even smaller size
         logout_button.setStyleSheet("""
             QPushButton {
                 background-color: #e74c3c;
                 color: white;
-                border-radius: 4px;
-                font-size: 10pt;
+                border-radius: 3px;
+                font-size: 8pt;  /* Smaller font */
                 font-weight: bold;
-                padding: 2px 8px;
+                padding: 1px 2px;
             }
             QPushButton:hover {
                 background-color: #c0392b;
+            }
+            QPushButton:pressed {
+                background-color: #a82315;
             }
         """)
         logout_button.clicked.connect(self.logout)
@@ -507,6 +513,15 @@ class DashboardWindow(BaseWindow):
         # Set splitter sizes proportionally to screen width
         content_splitter.setSizes([int(screen_width * 0.6), int(screen_width * 0.4)])
 
+        # Save splitter state when it changes
+        content_splitter.splitterMoved.connect(self.save_splitter_state)
+
+        # Store the splitter for later reference
+        self.content_splitter = content_splitter
+
+        # Try to restore previous splitter state
+        self.restore_splitter_state()
+
         main_layout.addWidget(content_splitter)
 
         # Set the main layout to a widget and make it the central widget
@@ -529,12 +544,23 @@ class DashboardWindow(BaseWindow):
 
         # Calculate optimal number of columns based on screen width
         screen_width = QApplication.desktop().screenGeometry().width()
-        card_width = 250  # Approximate width of a faculty card
+
+        # Scale card width based on screen dimensions with min/max constraints
+        card_width = max(200, min(300, int(screen_width * 0.2)))
+
         spacing = 20  # Grid spacing
 
-        # Calculate how many cards can fit in a row
-        available_width = screen_width * 0.6  # 60% of screen for faculty grid
-        max_cols = max(1, int(available_width / (card_width + spacing)))
+        # Get the actual width of the faculty grid container
+        grid_container_width = self.faculty_grid.parentWidget().width()
+        if grid_container_width <= 0:  # If not yet available, estimate based on screen
+            grid_container_width = int(screen_width * 0.6)  # 60% of screen for faculty grid
+
+        # Calculate how many cards can fit in a row, accounting for spacing
+        max_cols = max(1, int(grid_container_width / (card_width + spacing)))
+
+        # Adjust for very small screens
+        if screen_width < 800:
+            max_cols = 1  # Force single column on very small screens
 
         # Add faculty cards to grid
         row, col = 0, 0
@@ -748,26 +774,111 @@ class DashboardWindow(BaseWindow):
                 f"An error occurred while cancelling your consultation request: {str(e)}"
             )
 
+    def save_splitter_state(self):
+        """
+        Save the current splitter state to settings.
+        """
+        try:
+            # Import QSettings
+            from PyQt5.QtCore import QSettings
+
+            # Create settings object
+            settings = QSettings("ConsultEase", "Dashboard")
+
+            # Save splitter state
+            settings.setValue("splitter_state", self.content_splitter.saveState())
+            settings.setValue("splitter_sizes", self.content_splitter.sizes())
+
+            logger.debug("Saved splitter state")
+        except Exception as e:
+            logger.error(f"Error saving splitter state: {e}")
+
+    def restore_splitter_state(self):
+        """
+        Restore the splitter state from settings.
+        """
+        try:
+            # Import QSettings
+            from PyQt5.QtCore import QSettings
+
+            # Create settings object
+            settings = QSettings("ConsultEase", "Dashboard")
+
+            # Restore splitter state if available
+            if settings.contains("splitter_state"):
+                state = settings.value("splitter_state")
+                if state:
+                    self.content_splitter.restoreState(state)
+                    logger.debug("Restored splitter state")
+
+            # Fallback to sizes if state restoration fails
+            elif settings.contains("splitter_sizes"):
+                sizes = settings.value("splitter_sizes")
+                if sizes:
+                    self.content_splitter.setSizes(sizes)
+                    logger.debug("Restored splitter sizes")
+        except Exception as e:
+            logger.error(f"Error restoring splitter state: {e}")
+            # Use default sizes as fallback
+            screen_width = QApplication.desktop().screenGeometry().width()
+            self.content_splitter.setSizes([int(screen_width * 0.6), int(screen_width * 0.4)])
+
     def logout(self):
         """
         Handle logout button click.
         """
+        # Save splitter state before logout
+        self.save_splitter_state()
+
         self.change_window.emit("login", None)
 
     def show_notification(self, message, message_type="info"):
         """
-        Show a notification message to the user.
+        Show a notification message to the user using the standardized notification system.
 
         Args:
             message (str): Message to display
-            message_type (str): Type of message ('success', 'error', or 'info')
+            message_type (str): Type of message ('success', 'error', 'warning', or 'info')
         """
-        if message_type == "success":
-            QMessageBox.information(self, "Success", message)
-        elif message_type == "error":
-            QMessageBox.warning(self, "Error", message)
-        else:
-            QMessageBox.information(self, "Information", message)
+        try:
+            # Import notification manager
+            from ..utils.notification import NotificationManager
+
+            # Map message types
+            type_mapping = {
+                "success": NotificationManager.SUCCESS,
+                "error": NotificationManager.ERROR,
+                "warning": NotificationManager.WARNING,
+                "info": NotificationManager.INFO
+            }
+
+            # Get standardized message type
+            std_type = type_mapping.get(message_type.lower(), NotificationManager.INFO)
+
+            # Show notification using the manager
+            title = message_type.capitalize()
+            if message_type == "error":
+                title = "Error"
+            elif message_type == "success":
+                title = "Success"
+            elif message_type == "warning":
+                title = "Warning"
+            else:
+                title = "Information"
+
+            NotificationManager.show_message(self, title, message, std_type)
+
+        except ImportError:
+            # Fallback to basic message boxes if notification manager is not available
+            logger.warning("NotificationManager not available, using basic message boxes")
+            if message_type == "success":
+                QMessageBox.information(self, "Success", message)
+            elif message_type == "error":
+                QMessageBox.warning(self, "Error", message)
+            elif message_type == "warning":
+                QMessageBox.warning(self, "Warning", message)
+            else:
+                QMessageBox.information(self, "Information", message)
 
     def simulate_consultation_request(self):
         """
