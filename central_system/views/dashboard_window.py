@@ -31,7 +31,8 @@ class FacultyCard(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
 
         # Set fixed width and minimum height for consistent card size
-        self.setFixedWidth(220)
+        # Increased width to accommodate longer faculty names
+        self.setFixedWidth(280)
         self.setMinimumHeight(180)
 
         # Set size policy to prevent stretching
@@ -85,20 +86,35 @@ class FacultyCard(QFrame):
         # Faculty text info
         text_layout = QVBoxLayout()
         text_layout.setAlignment(Qt.AlignLeft)
-        text_layout.setSpacing(2)
+        text_layout.setSpacing(4)  # Increased spacing between name and department
+        text_layout.setContentsMargins(0, 0, 0, 0)  # Remove margins to maximize text space
 
-        # Faculty name - reduced font size
+        # Faculty name - improved styling for better readability
         name_label = QLabel(self.faculty.name)
-        name_label.setStyleSheet("font-size: 14pt; font-weight: bold;")
+        name_label.setStyleSheet("""
+            font-size: 15pt;
+            font-weight: bold;
+            padding: 0;
+            margin: 0;
+        """)
         name_label.setAlignment(Qt.AlignLeft)
         name_label.setWordWrap(True)
+        name_label.setMinimumWidth(180)  # Ensure enough width for text
+        name_label.setMaximumWidth(200)  # Limit maximum width
         text_layout.addWidget(name_label)
 
-        # Department - reduced font size
+        # Department - improved styling
         dept_label = QLabel(self.faculty.department)
-        dept_label.setStyleSheet("font-size: 10pt; color: #666;")
+        dept_label.setStyleSheet("""
+            font-size: 11pt;
+            color: #666;
+            padding: 0;
+            margin: 0;
+        """)
         dept_label.setAlignment(Qt.AlignLeft)
         dept_label.setWordWrap(True)
+        dept_label.setMinimumWidth(180)  # Ensure enough width for text
+        dept_label.setMaximumWidth(200)  # Limit maximum width
         text_layout.addWidget(dept_label)
 
         info_layout.addLayout(text_layout)
@@ -553,12 +569,14 @@ class DashboardWindow(BaseWindow):
         # Faculty grid in a scroll area with improved spacing and alignment
         self.faculty_grid = QGridLayout()
         self.faculty_grid.setSpacing(20)  # Increased spacing between cards
-        self.faculty_grid.setAlignment(Qt.AlignCenter)  # Center the grid contents
+        self.faculty_grid.setAlignment(Qt.AlignTop | Qt.AlignHCenter)  # Align to top and center horizontally
         self.faculty_grid.setContentsMargins(15, 15, 15, 15)  # Add margins around the grid
 
+        # Create a scroll area for the faculty grid
         faculty_scroll = QScrollArea()
         faculty_scroll.setWidgetResizable(True)
         faculty_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        faculty_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         faculty_scroll.setStyleSheet("""
             QScrollArea {
                 background-color: transparent;
@@ -579,10 +597,19 @@ class DashboardWindow(BaseWindow):
             }
         """)
 
+        # Create a container widget for the faculty grid
         faculty_scroll_content = QWidget()
         faculty_scroll_content.setLayout(self.faculty_grid)
         faculty_scroll_content.setStyleSheet("background-color: transparent;")
+
+        # Set the scroll area widget
         faculty_scroll.setWidget(faculty_scroll_content)
+
+        # Ensure scroll area starts at the top
+        faculty_scroll.verticalScrollBar().setValue(0)
+
+        # Store the scroll area for later reference
+        self.faculty_scroll = faculty_scroll
 
         faculty_layout.addWidget(faculty_scroll)
 
@@ -607,7 +634,11 @@ class DashboardWindow(BaseWindow):
         # Try to restore previous splitter state
         self.restore_splitter_state()
 
+        # Add the splitter to the main layout
         main_layout.addWidget(content_splitter)
+
+        # Schedule a scroll to top after the UI is fully loaded
+        QTimer.singleShot(100, self._scroll_faculty_to_top)
 
         # Set the main layout to a widget and make it the central widget
         central_widget = QWidget()
@@ -631,7 +662,7 @@ class DashboardWindow(BaseWindow):
         screen_width = QApplication.desktop().screenGeometry().width()
 
         # Fixed card width (matches the width set in FacultyCard)
-        card_width = 220
+        card_width = 280  # Updated to match the increased FacultyCard width
 
         # Grid spacing (matches the spacing set in faculty_grid)
         spacing = 20
@@ -713,6 +744,10 @@ class DashboardWindow(BaseWindow):
 
             # Update the grid
             self.populate_faculty_grid(faculties)
+
+            # Ensure scroll area starts at the top
+            if hasattr(self, 'faculty_scroll') and self.faculty_scroll:
+                self.faculty_scroll.verticalScrollBar().setValue(0)
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
@@ -742,6 +777,10 @@ class DashboardWindow(BaseWindow):
 
             # Update the grid
             self.populate_faculty_grid(faculties)
+
+            # Ensure scroll area starts at the top
+            if hasattr(self, 'faculty_scroll') and self.faculty_scroll:
+                self.faculty_scroll.verticalScrollBar().setValue(0)
 
             # Also refresh consultation history if student is logged in
             if self.student:
@@ -981,6 +1020,15 @@ class DashboardWindow(BaseWindow):
                 QMessageBox.warning(self, "Warning", message)
             else:
                 QMessageBox.information(self, "Information", message)
+
+    def _scroll_faculty_to_top(self):
+        """
+        Scroll the faculty grid to the top.
+        This is called after the UI is fully loaded to ensure faculty cards are visible.
+        """
+        if hasattr(self, 'faculty_scroll') and self.faculty_scroll:
+            self.faculty_scroll.verticalScrollBar().setValue(0)
+            logger.debug("Scrolled faculty grid to top")
 
     def simulate_consultation_request(self):
         """
