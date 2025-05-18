@@ -1487,6 +1487,7 @@ class SystemMaintenanceTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.consultation_controller = None
+        self.admin_controller = None
         self.init_ui()
         self.load_faculty_list()
 
@@ -1512,6 +1513,53 @@ class SystemMaintenanceTab(QWidget):
 
         database_group.setLayout(database_layout)
         main_layout.addWidget(database_group)
+
+        # Admin Account Management section
+        admin_group = QGroupBox("Admin Account Management")
+        admin_layout = QVBoxLayout()
+
+        # Change Username section
+        username_form = QFormLayout()
+        self.current_password_username = QLineEdit()
+        self.current_password_username.setEchoMode(QLineEdit.Password)
+        username_form.addRow("Current Password:", self.current_password_username)
+
+        self.new_username_input = QLineEdit()
+        username_form.addRow("New Username:", self.new_username_input)
+
+        change_username_button = QPushButton("Change Username")
+        change_username_button.clicked.connect(self.change_admin_username)
+        username_form.addRow("", change_username_button)
+
+        admin_layout.addLayout(username_form)
+
+        # Add a separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        admin_layout.addWidget(separator)
+
+        # Change Password section
+        password_form = QFormLayout()
+        self.current_password_input = QLineEdit()
+        self.current_password_input.setEchoMode(QLineEdit.Password)
+        password_form.addRow("Current Password:", self.current_password_input)
+
+        self.new_password_input = QLineEdit()
+        self.new_password_input.setEchoMode(QLineEdit.Password)
+        password_form.addRow("New Password:", self.new_password_input)
+
+        self.confirm_password_input = QLineEdit()
+        self.confirm_password_input.setEchoMode(QLineEdit.Password)
+        password_form.addRow("Confirm Password:", self.confirm_password_input)
+
+        change_password_button = QPushButton("Change Password")
+        change_password_button.clicked.connect(self.change_admin_password)
+        password_form.addRow("", change_password_button)
+
+        admin_layout.addLayout(password_form)
+        admin_group.setLayout(admin_layout)
+        main_layout.addWidget(admin_group)
 
         # System logs section
         logs_group = QGroupBox("System Logs")
@@ -1868,6 +1916,124 @@ class SystemMaintenanceTab(QWidget):
         except Exception as e:
             logger.error(f"Error testing faculty desk connection: {str(e)}")
             QMessageBox.critical(self, "Test Connection", f"Error testing faculty desk connection: {str(e)}")
+
+    def change_admin_username(self):
+        """
+        Change the admin username.
+        """
+        try:
+            # Get the current admin info from the parent window
+            parent_window = self.window()
+            if not hasattr(parent_window, 'admin') or not parent_window.admin:
+                QMessageBox.warning(self, "Admin Error", "No admin user is currently logged in.")
+                return
+
+            # Get admin ID
+            admin_id = parent_window.admin.get('id') if isinstance(parent_window.admin, dict) else parent_window.admin.id
+
+            # Get input values
+            current_password = self.current_password_username.text()
+            new_username = self.new_username_input.text().strip()
+
+            # Validate inputs
+            if not current_password:
+                QMessageBox.warning(self, "Validation Error", "Please enter your current password.")
+                return
+
+            if not new_username:
+                QMessageBox.warning(self, "Validation Error", "Please enter a new username.")
+                return
+
+            # Initialize admin controller if needed
+            if not self.admin_controller:
+                from ..controllers import AdminController
+                self.admin_controller = AdminController()
+
+            # Change username
+            success = self.admin_controller.change_username(admin_id, current_password, new_username)
+
+            if success:
+                # Update the admin info in the parent window
+                if isinstance(parent_window.admin, dict):
+                    parent_window.admin['username'] = new_username
+                else:
+                    parent_window.admin.username = new_username
+
+                # Update the header label in the parent window
+                for child in parent_window.findChildren(QLabel):
+                    if "Logged in as:" in child.text():
+                        child.setText(f"Admin Dashboard - Logged in as: {new_username}")
+                        break
+
+                QMessageBox.information(self, "Username Changed", "Your username has been changed successfully.")
+
+                # Clear the input fields
+                self.current_password_username.clear()
+                self.new_username_input.clear()
+            else:
+                QMessageBox.warning(self, "Username Change Failed", "Failed to change username. Please check your password and try again.")
+
+        except Exception as e:
+            logger.error(f"Error changing admin username: {str(e)}")
+            QMessageBox.critical(self, "Username Change Error", f"Error changing username: {str(e)}")
+
+    def change_admin_password(self):
+        """
+        Change the admin password.
+        """
+        try:
+            # Get the current admin info from the parent window
+            parent_window = self.window()
+            if not hasattr(parent_window, 'admin') or not parent_window.admin:
+                QMessageBox.warning(self, "Admin Error", "No admin user is currently logged in.")
+                return
+
+            # Get admin ID
+            admin_id = parent_window.admin.get('id') if isinstance(parent_window.admin, dict) else parent_window.admin.id
+
+            # Get input values
+            current_password = self.current_password_input.text()
+            new_password = self.new_password_input.text()
+            confirm_password = self.confirm_password_input.text()
+
+            # Validate inputs
+            if not current_password:
+                QMessageBox.warning(self, "Validation Error", "Please enter your current password.")
+                return
+
+            if not new_password:
+                QMessageBox.warning(self, "Validation Error", "Please enter a new password.")
+                return
+
+            if new_password != confirm_password:
+                QMessageBox.warning(self, "Validation Error", "New password and confirmation do not match.")
+                return
+
+            # Initialize admin controller if needed
+            if not self.admin_controller:
+                from ..controllers import AdminController
+                self.admin_controller = AdminController()
+
+            # Change password
+            success = self.admin_controller.change_password(admin_id, current_password, new_password)
+
+            if success:
+                QMessageBox.information(self, "Password Changed", "Your password has been changed successfully.")
+
+                # Clear the input fields
+                self.current_password_input.clear()
+                self.new_password_input.clear()
+                self.confirm_password_input.clear()
+            else:
+                QMessageBox.warning(self, "Password Change Failed", "Failed to change password. Please check your current password and try again.")
+
+        except ValueError as e:
+            # This will catch password validation errors from the Admin model
+            logger.error(f"Password validation error: {str(e)}")
+            QMessageBox.warning(self, "Password Validation Error", str(e))
+        except Exception as e:
+            logger.error(f"Error changing admin password: {str(e)}")
+            QMessageBox.critical(self, "Password Change Error", f"Error changing password: {str(e)}")
 
     def save_settings(self):
         """
