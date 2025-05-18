@@ -1,6 +1,7 @@
 """
-Reset the admin password to the default value (admin123).
+Reset the admin password to a secure default value.
 This script will find the admin user with username 'admin' and reset its password.
+The password will meet all security requirements (uppercase, lowercase, digits, special chars).
 """
 import sys
 import os
@@ -28,43 +29,43 @@ def reset_admin_password():
     try:
         # Initialize database if it doesn't exist
         init_db()
-        
+
         # Get database connection
         db = get_db()
-        
+
         # Find admin user with username 'admin'
         admin = db.query(Admin).filter(Admin.username == 'admin').first()
-        
+
         if admin:
             logger.info(f"Found admin user: {admin.username} (ID: {admin.id})")
-            
-            # Reset password to 'admin123'
-            password_hash, salt = Admin.hash_password("admin123")
-            
+
+            # Reset password to a secure default: 'Admin123!'
+            password_hash, salt = Admin.hash_password("Admin123!")
+
             # Update admin
             admin.password_hash = password_hash
             admin.salt = salt
-            
+
             # Make sure admin is active
             admin.is_active = True
-            
+
             # Commit changes
             db.commit()
-            
+
             logger.info(f"Reset password for admin user: {admin.username}")
             logger.warning(
-                "Admin password has been reset to 'admin123'. "
+                "Admin password has been reset to 'Admin123!'. "
                 "Please change this password after logging in!"
             )
         else:
             logger.warning("No admin user found with username 'admin'")
-            
+
             # Create admin user if it doesn't exist
             logger.info("Creating new admin user with default credentials")
-            
-            # Hash password
-            password_hash, salt = Admin.hash_password("admin123")
-            
+
+            # Hash password - use a secure default: 'Admin123!'
+            password_hash, salt = Admin.hash_password("Admin123!")
+
             # Create new admin
             admin = Admin(
                 username="admin",
@@ -72,21 +73,21 @@ def reset_admin_password():
                 salt=salt,
                 is_active=True
             )
-            
+
             db.add(admin)
             db.commit()
-            
+
             logger.info(f"Created new admin user: admin (ID: {admin.id})")
             logger.warning(
-                "Created default admin user with username 'admin' and password 'admin123'. "
+                "Created default admin user with username 'admin' and password 'Admin123!'. "
                 "Please change this password after logging in!"
             )
-        
+
         # Close database connection
         db.close()
-        
-        print("Admin password has been reset to 'admin123'")
-        
+
+        print("Admin password has been reset to 'Admin123!'")
+
     except Exception as e:
         logger.error(f"Error resetting admin password: {str(e)}")
         import traceback
