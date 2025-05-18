@@ -2,7 +2,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QPushButton, QTabWidget, QTableWidget, QTableWidgetItem,
                                QHeaderView, QFrame, QDialog, QFormLayout, QLineEdit,
                                QDialogButtonBox, QMessageBox, QComboBox, QCheckBox,
-                               QGroupBox, QFileDialog, QTextEdit, QApplication)
+                               QGroupBox, QFileDialog, QTextEdit, QApplication, QScrollArea)
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QIcon, QFont, QTextCursor
 
@@ -40,8 +40,11 @@ class AdminDashboardWindow(BaseWindow):
         # Set window title
         self.setWindowTitle("ConsultEase - Admin Dashboard")
 
-        # Main layout
-        main_layout = QVBoxLayout()
+        # Create a main container widget for the scroll area
+        main_container = QWidget()
+        main_layout = QVBoxLayout(main_container)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(10)
 
         # Header with admin info and logout button
         header_layout = QHBoxLayout()
@@ -99,10 +102,45 @@ class AdminDashboardWindow(BaseWindow):
 
         main_layout.addWidget(self.tab_widget)
 
-        # Set the central widget
-        central_widget = QWidget()
-        central_widget.setLayout(main_layout)
-        self.setCentralWidget(central_widget)
+        # Create a scroll area and set its properties
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)  # Allow the widget to resize
+        scroll_area.setWidget(main_container)  # Set the main container as the scroll area's widget
+
+        # Only show scrollbars when needed
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        # Style the scroll area to match the application theme
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #f0f0f0;
+                width: 12px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #c0c0c0;
+                min-height: 20px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #a0a0a0;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+        """)
+
+        # Set the scroll area as the central widget
+        self.setCentralWidget(scroll_area)
 
     def logout(self):
         """
@@ -162,8 +200,11 @@ class FacultyManagementTab(QWidget):
         """
         Initialize the UI components.
         """
+        # Create a container widget for the scroll area
+        container = QWidget()
+
         # Main layout
-        main_layout = QVBoxLayout()
+        main_layout = QVBoxLayout(container)
 
         # Buttons for actions
         button_layout = QHBoxLayout()
@@ -201,8 +242,50 @@ class FacultyManagementTab(QWidget):
 
         main_layout.addWidget(self.faculty_table)
 
-        # Set the layout
-        self.setLayout(main_layout)
+        # Add some spacing at the bottom for better appearance
+        main_layout.addSpacing(10)
+
+        # Create a scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(container)
+
+        # Only show scrollbars when needed
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        # Style the scroll area to match the application theme
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #f0f0f0;
+                width: 12px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #c0c0c0;
+                min-height: 20px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #a0a0a0;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+        """)
+
+        # Create a layout for the tab and add the scroll area
+        tab_layout = QVBoxLayout(self)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.addWidget(scroll_area)
 
         # Initial data load
         self.refresh_data()
@@ -611,8 +694,11 @@ class StudentManagementTab(QWidget):
         """
         Initialize the UI components.
         """
+        # Create a container widget for the scroll area
+        container = QWidget()
+
         # Main layout
-        main_layout = QVBoxLayout()
+        main_layout = QVBoxLayout(container)
 
         # Buttons for actions
         button_layout = QHBoxLayout()
@@ -654,8 +740,50 @@ class StudentManagementTab(QWidget):
 
         main_layout.addWidget(self.student_table)
 
-        # Set the layout
-        self.setLayout(main_layout)
+        # Add some spacing at the bottom for better appearance
+        main_layout.addSpacing(10)
+
+        # Create a scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(container)
+
+        # Only show scrollbars when needed
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        # Style the scroll area to match the application theme
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #f0f0f0;
+                width: 12px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #c0c0c0;
+                min-height: 20px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #a0a0a0;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+        """)
+
+        # Create a layout for the tab and add the scroll area
+        tab_layout = QVBoxLayout(self)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.addWidget(scroll_area)
 
         # Initial data load
         self.refresh_data()
@@ -1495,8 +1623,11 @@ class SystemMaintenanceTab(QWidget):
         """
         Initialize the UI components.
         """
+        # Create a container widget for the scroll area
+        container = QWidget()
+
         # Main layout
-        main_layout = QVBoxLayout()
+        main_layout = QVBoxLayout(container)
 
         # Database section
         database_group = QGroupBox("Database Maintenance")
@@ -1617,8 +1748,50 @@ class SystemMaintenanceTab(QWidget):
         settings_group.setLayout(settings_layout)
         main_layout.addWidget(settings_group)
 
-        # Set the layout
-        self.setLayout(main_layout)
+        # Add some spacing at the bottom for better appearance
+        main_layout.addSpacing(20)
+
+        # Create a scroll area for the system maintenance tab
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(container)
+
+        # Only show scrollbars when needed
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        # Style the scroll area to match the application theme
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #f0f0f0;
+                width: 12px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #c0c0c0;
+                min-height: 20px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #a0a0a0;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+        """)
+
+        # Create a layout for the tab and add the scroll area
+        tab_layout = QVBoxLayout(self)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.addWidget(scroll_area)
 
     def backup_database(self):
         """

@@ -30,23 +30,25 @@ class FacultyCard(QFrame):
         """
         self.setFrameShape(QFrame.StyledPanel)
 
-        # Use minimum size instead of fixed size for better responsiveness
-        self.setMinimumSize(250, 200)
+        # Reduced minimum size for better UI integration
+        self.setMinimumSize(220, 180)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
 
         # Set styling based on faculty status
         self.update_style()
 
-        # Main layout
+        # Main layout with reduced margins
         main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(6)
 
         # Faculty info layout (image + text)
         info_layout = QHBoxLayout()
 
-        # Faculty image
+        # Faculty image - reduced size
         image_label = QLabel()
-        image_label.setFixedSize(80, 80)
-        image_label.setStyleSheet("border: 1px solid #ddd; border-radius: 40px; background-color: white;")
+        image_label.setFixedSize(70, 70)
+        image_label.setStyleSheet("border: 1px solid #ddd; border-radius: 35px; background-color: white;")
         image_label.setScaledContents(True)
 
         # Try to load faculty image
@@ -70,39 +72,47 @@ class FacultyCard(QFrame):
         # Faculty text info
         text_layout = QVBoxLayout()
 
-        # Faculty name
+        # Faculty name - reduced font size
         name_label = QLabel(self.faculty.name)
-        name_label.setStyleSheet("font-size: 18pt; font-weight: bold;")
+        name_label.setStyleSheet("font-size: 16pt; font-weight: bold;")
         text_layout.addWidget(name_label)
 
-        # Department
+        # Department - reduced font size
         dept_label = QLabel(self.faculty.department)
-        dept_label.setStyleSheet("font-size: 12pt; color: #666;")
+        dept_label.setStyleSheet("font-size: 11pt; color: #666;")
         text_layout.addWidget(dept_label)
 
         info_layout.addLayout(text_layout)
         main_layout.addLayout(info_layout)
 
-        # Status indicator
+        # Status indicator - removed borders and simplified
         status_layout = QHBoxLayout()
         status_icon = QLabel("●")
         if self.faculty.status:
-            status_icon.setStyleSheet("font-size: 16pt; color: #4caf50;")
+            # No border on status icon, reduced font size
+            status_icon.setStyleSheet("font-size: 14pt; color: #4caf50; border: none;")
             status_text = QLabel("Available")
-            status_text.setStyleSheet("font-size: 14pt; color: #4caf50;")
+            # No border on status text, reduced font size
+            status_text.setStyleSheet("font-size: 12pt; color: #4caf50; border: none;")
         else:
-            status_icon.setStyleSheet("font-size: 16pt; color: #f44336;")
+            status_icon.setStyleSheet("font-size: 14pt; color: #f44336; border: none;")
             status_text = QLabel("Unavailable")
-            status_text.setStyleSheet("font-size: 14pt; color: #f44336;")
+            status_text.setStyleSheet("font-size: 12pt; color: #f44336; border: none;")
 
         status_layout.addWidget(status_icon)
         status_layout.addWidget(status_text)
         status_layout.addStretch()
         main_layout.addLayout(status_layout)
 
-        # Request consultation button
+        # Request consultation button - more compact
         request_button = QPushButton("Request Consultation")
         request_button.setEnabled(self.faculty.status)
+        request_button.setStyleSheet("""
+            QPushButton {
+                font-size: 11pt;
+                padding: 5px;
+            }
+        """)
         request_button.clicked.connect(self.request_consultation)
         main_layout.addWidget(request_button)
 
@@ -114,16 +124,16 @@ class FacultyCard(QFrame):
             self.setStyleSheet('''
                 QFrame {
                     background-color: #e8f5e9;
-                    border: 2px solid #4caf50;
-                    border-radius: 10px;
+                    border: 1px solid #4caf50;
+                    border-radius: 8px;
                 }
             ''')
         else:
             self.setStyleSheet('''
                 QFrame {
                     background-color: #ffebee;
-                    border: 2px solid #f44336;
-                    border-radius: 10px;
+                    border: 1px solid #f44336;
+                    border-radius: 8px;
                 }
             ''')
 
@@ -487,9 +497,9 @@ class DashboardWindow(BaseWindow):
 
         faculty_layout.addLayout(filter_layout)
 
-        # Faculty grid in a scroll area
+        # Faculty grid in a scroll area - reduced spacing
         self.faculty_grid = QGridLayout()
-        self.faculty_grid.setSpacing(20)
+        self.faculty_grid.setSpacing(15)
 
         faculty_scroll = QScrollArea()
         faculty_scroll.setWidgetResizable(True)
@@ -545,10 +555,10 @@ class DashboardWindow(BaseWindow):
         # Calculate optimal number of columns based on screen width
         screen_width = QApplication.desktop().screenGeometry().width()
 
-        # Scale card width based on screen dimensions with min/max constraints
-        card_width = max(200, min(300, int(screen_width * 0.2)))
+        # Scale card width based on screen dimensions with reduced min/max constraints
+        card_width = max(180, min(250, int(screen_width * 0.18)))
 
-        spacing = 20  # Grid spacing
+        spacing = 15  # Reduced grid spacing
 
         # Get the actual width of the faculty grid container
         grid_container_width = self.faculty_grid.parentWidget().width()
