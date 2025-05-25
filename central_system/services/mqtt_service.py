@@ -7,18 +7,27 @@ import os
 import configparser
 import pathlib
 import random
+import warnings
 from datetime import datetime
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Set up logging (configuration handled centrally in main.py)
 logger = logging.getLogger(__name__)
 
 class MQTTService:
     """
     MQTT Service for communicating with the Faculty Desk Unit.
+
+    DEPRECATED: This service is deprecated in favor of AsyncMQTTService.
+    Use central_system.services.async_mqtt_service.AsyncMQTTService instead.
     """
 
     def __init__(self):
+        # Issue deprecation warning
+        warnings.warn(
+            "MQTTService is deprecated. Use AsyncMQTTService instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         # Load settings from settings.ini if available
         self._load_settings()
 

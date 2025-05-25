@@ -1,11 +1,11 @@
 import logging
 import datetime
-from ..services import get_mqtt_service
 from ..models import Consultation, ConsultationStatus, get_db
+from ..utils.mqtt_utils import publish_consultation_request, publish_mqtt_message
 from ..utils.mqtt_topics import MQTTTopics
+from ..utils.cache_manager import get_cache_manager, invalidate_consultation_cache
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class ConsultationController:
@@ -17,7 +17,6 @@ class ConsultationController:
         """
         Initialize the consultation controller.
         """
-        self.mqtt_service = get_mqtt_service()
         self.callbacks = []
 
     def start(self):
@@ -25,10 +24,7 @@ class ConsultationController:
         Start the consultation controller.
         """
         logger.info("Starting Consultation controller")
-
-        # Connect MQTT service
-        if not self.mqtt_service.is_connected:
-            self.mqtt_service.connect()
+        # Async MQTT service is managed globally, no need to connect here
 
     def stop(self):
         """
@@ -75,17 +71,6 @@ class ConsultationController:
         try:
             logger.info(f"Creating new consultation request (Student: {student_id}, Faculty: {faculty_id})")
 
-            # Check if MQTT service is connected
-            if not self.mqtt_service.is_connected:
-                logger.warning("MQTT service is not connected. Attempting to connect...")
-                self.mqtt_service.connect()
-                # Wait briefly for connection
-                import time
-                time.sleep(1)
-
-                if not self.mqtt_service.is_connected:
-                    logger.error("Failed to connect to MQTT service. Consultation will be created but may not be delivered to faculty desk unit.")
-
             db = get_db()
 
             # Create new consultation
@@ -103,32 +88,16 @@ class ConsultationController:
 
             logger.info(f"Created consultation request: {consultation.id} (Student: {student_id}, Faculty: {faculty_id})")
 
-            # Get student and faculty information for direct MQTT publishing
-            from ..models import Student, Faculty
-            student = db.query(Student).filter(Student.id == student_id).first()
-            faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
-
-            # Create a simple message that will definitely work
-            simple_message = f"Student: {student.name if student else 'Unknown'}\n"
-            if course_code:
-                simple_message += f"Course: {course_code}\n"
-            simple_message += f"Request: {request_message}"
-
-            # Publish directly to the legacy topic which is guaranteed to work
-            success_direct = self.mqtt_service.publish_raw(MQTTTopics.LEGACY_FACULTY_MESSAGES, simple_message)
-
-            if success_direct:
-                logger.info(f"Successfully published direct message to {MQTTTopics.LEGACY_FACULTY_MESSAGES}")
-            else:
-                logger.error(f"Failed to publish direct message to {MQTTTopics.LEGACY_FACULTY_MESSAGES}")
-
-            # Also try the regular publishing method
+            # Publish consultation using the optimized method
             publish_success = self._publish_consultation(consultation)
 
             if publish_success:
                 logger.info(f"Successfully published consultation request {consultation.id} to faculty desk unit")
             else:
                 logger.error(f"Failed to publish consultation request {consultation.id} to faculty desk unit")
+
+            # Invalidate consultation cache for the student
+            invalidate_consultation_cache(student_id)
 
             # Notify callbacks
             self._notify_callbacks(consultation)
@@ -140,7 +109,7 @@ class ConsultationController:
 
     def _publish_consultation(self, consultation):
         """
-        Publish consultation to MQTT.
+        Publish consultation to MQTT using async service.
 
         Args:
             consultation (Consultation): Consultation object to publish
@@ -169,14 +138,8 @@ class ConsultationController:
                 logger.error(f"Faculty not found for consultation {consultation_id}")
                 return False
 
-            # Format the message for the faculty desk unit display - EXACTLY like the test message
-            message = f"Student: {student.name}\n"
-            if consultation.course_code:
-                message += f"Course: {consultation.course_code}\n"
-            message += f"Request: {consultation.request_message}"
-
-            # Create payload - EXACTLY like the test message format
-            payload = {
+            # Prepare consultation data for async publishing
+            consultation_data = {
                 'id': consultation.id,
                 'student_id': student.id,
                 'student_name': student.name,
@@ -186,65 +149,33 @@ class ConsultationController:
                 'request_message': consultation.request_message,
                 'course_code': consultation.course_code,
                 'status': consultation.status.value,
-                'requested_at': consultation.requested_at.isoformat() if consultation.requested_at else None,
-                # IMPORTANT: Add message field for easier extraction by faculty desk unit
-                'message': message
+                'requested_at': consultation.requested_at.isoformat() if consultation.requested_at else None
             }
 
-            logger.info(f"Preparing to publish consultation request {consultation.id} for faculty {faculty.id}")
+            logger.info(f"Publishing consultation request {consultation.id} for faculty {faculty.id} using async MQTT")
 
-            # IMPORTANT: First publish to the legacy topic that the faculty desk unit is known to use
-            # This is the topic used in the faculty desk unit code and is GUARANTEED to work
+            # Use the async MQTT utility function
+            success = publish_consultation_request(consultation_data)
+
+            # Also publish to legacy topic for backward compatibility
+            message = f"Student: {student.name}\n"
+            if consultation.course_code:
+                message += f"Course: {consultation.course_code}\n"
+            message += f"Request: {consultation.request_message}"
+
             legacy_topic = MQTTTopics.LEGACY_FACULTY_MESSAGES
-
-            # Publish the message directly (not as JSON) to match the faculty desk unit code
-            # This is the MOST RELIABLE method and should work regardless of faculty ID
-            success_legacy = self.mqtt_service.publish_raw(legacy_topic, message)
-
-            if success_legacy:
-                logger.info(f"Successfully published consultation request to legacy topic {legacy_topic}")
-            else:
-                logger.error(f"Failed to publish consultation request to legacy topic {legacy_topic}")
-
-            # Now publish to faculty-specific topic using standardized format
-            faculty_requests_topic = MQTTTopics.get_faculty_requests_topic(faculty.id)
-
-            # The MQTT service will format the message for the faculty desk unit
-            success = self.mqtt_service.publish(faculty_requests_topic, payload)
-
-            if success:
-                logger.info(f"Successfully published consultation request to {faculty_requests_topic}")
-            else:
-                logger.error(f"Failed to publish consultation request to {faculty_requests_topic}")
-
-            # Try publishing to the faculty-specific messages topic in plain text format as well
-            # This provides maximum compatibility
-            faculty_messages_topic = MQTTTopics.get_faculty_messages_topic(faculty.id)
-            success_faculty = self.mqtt_service.publish_raw(faculty_messages_topic, message)
-
-            if success_faculty:
-                logger.info(f"Successfully published plain text message to {faculty_messages_topic}")
-            else:
-                logger.error(f"Failed to publish plain text message to {faculty_messages_topic}")
-
-            # For backward compatibility, also publish to the legacy topic
-            # This ensures we're using the exact same format that works in the test
-            success_test = self.mqtt_service.publish_raw(MQTTTopics.LEGACY_FACULTY_MESSAGES, message)
-            if success_test:
-                logger.info(f"Successfully published to {MQTTTopics.LEGACY_FACULTY_MESSAGES} (backward compatibility)")
-            else:
-                logger.error(f"Failed to publish to {MQTTTopics.LEGACY_FACULTY_MESSAGES} (backward compatibility)")
-
-            # Log overall success/failure
-            if success or success_legacy or success_faculty or success_test:
-                logger.info(f"Successfully published consultation request {consultation.id} to at least one topic")
-            else:
-                logger.error(f"Failed to publish consultation request {consultation.id} to any topic")
+            legacy_success = publish_mqtt_message(legacy_topic, message, qos=2)
 
             # Close the database session
             db.close()
 
-            return success or success_legacy or success_faculty or success_test
+            overall_success = success or legacy_success
+            if overall_success:
+                logger.info(f"Successfully published consultation request {consultation.id} using async MQTT")
+            else:
+                logger.error(f"Failed to publish consultation request {consultation.id} using async MQTT")
+
+            return overall_success
         except Exception as e:
             logger.error(f"Error publishing consultation: {str(e)}")
             return False
@@ -400,17 +331,17 @@ class ConsultationController:
                 'message': message
             }
 
-            # Publish to JSON topic
-            success_json = self.mqtt_service.publish(faculty_requests_topic, payload)
+            # Publish using async MQTT service
+            success_json = publish_mqtt_message(faculty_requests_topic, payload)
 
             # Publish to legacy plain text topic for backward compatibility
-            success_text = self.mqtt_service.publish_raw(MQTTTopics.LEGACY_FACULTY_MESSAGES, message)
+            success_text = publish_mqtt_message(MQTTTopics.LEGACY_FACULTY_MESSAGES, message, qos=2)
 
             # Publish to faculty-specific plain text topic
             faculty_messages_topic = MQTTTopics.get_faculty_messages_topic(faculty_id)
-            success_faculty = self.mqtt_service.publish_raw(faculty_messages_topic, message)
+            success_faculty = publish_mqtt_message(faculty_messages_topic, message, qos=2)
 
-            logger.info(f"Test message sent to faculty desk unit {faculty_id} ({faculty.name})")
+            logger.info(f"Test message sent to faculty desk unit {faculty_id} ({faculty.name}) using async MQTT")
             logger.info(f"JSON topic success: {success_json}, Text topic success: {success_text}, Faculty topic success: {success_faculty}")
 
             return success_json or success_text or success_faculty

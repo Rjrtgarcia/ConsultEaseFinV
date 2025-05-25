@@ -1,226 +1,25 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QPushButton, QGridLayout, QScrollArea, QFrame,
-                               QLineEdit, QTextEdit, QComboBox, QMessageBox,
+                               QLineEdit, QComboBox, QMessageBox, QTextEdit,
                                QSplitter, QApplication, QSizePolicy)
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSize
-from PyQt5.QtGui import QIcon, QColor, QPixmap
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
+from PyQt5.QtGui import QPixmap
 
 import os
 import logging
 from .base_window import BaseWindow
 from .consultation_panel import ConsultationPanel
+from ..utils.ui_components import FacultyCard
+from ..ui.pooled_faculty_card import get_faculty_card_manager
+from ..utils.ui_performance import (
+    get_ui_batcher, get_widget_state_manager, SmartRefreshManager,
+    batch_ui_update, timed_ui_update
+)
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
-class FacultyCard(QFrame):
-    """
-    Widget to display faculty information and status.
-    """
-    consultation_requested = pyqtSignal(object)
 
-    def __init__(self, faculty, parent=None):
-        super().__init__(parent)
-        self.faculty = faculty
-        self.init_ui()
-
-    def init_ui(self):
-        """
-        Initialize the faculty card UI.
-        """
-        self.setFrameShape(QFrame.StyledPanel)
-
-        # Set fixed width and minimum height for consistent card size
-        # Increased width to accommodate longer faculty names
-        self.setFixedWidth(280)
-        self.setMinimumHeight(180)
-
-        # Set size policy to prevent stretching
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)
-
-        # Add drop shadow effect for card-like appearance
-        self.setGraphicsEffect(self._create_shadow_effect())
-
-        # Set styling based on faculty status
-        self.update_style()
-
-        # Main layout with proper margins for card-like appearance
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(12, 12, 12, 12)
-        main_layout.setSpacing(8)
-        main_layout.setAlignment(Qt.AlignCenter)
-
-        # Faculty info layout (image + text)
-        info_layout = QHBoxLayout()
-        info_layout.setAlignment(Qt.AlignCenter)
-
-        # Faculty image - reduced size with improved styling
-        image_label = QLabel()
-        image_label.setFixedSize(60, 60)
-        image_label.setStyleSheet("""
-            border: 1px solid #ddd;
-            border-radius: 30px;
-            background-color: white;
-            padding: 2px;
-        """)
-        image_label.setScaledContents(True)
-
-        # Try to load faculty image
-        if hasattr(self.faculty, 'get_image_path') and self.faculty.image_path:
-            try:
-                image_path = self.faculty.get_image_path()
-                if image_path and os.path.exists(image_path):
-                    pixmap = QPixmap(image_path)
-                    if not pixmap.isNull():
-                        # Create circular mask for the image
-                        image_label.setPixmap(pixmap)
-                    else:
-                        logger.warning(f"Could not load image for faculty {self.faculty.name}: {image_path}")
-                else:
-                    logger.warning(f"Image path not found for faculty {self.faculty.name}: {image_path}")
-            except Exception as e:
-                logger.error(f"Error loading faculty image: {str(e)}")
-
-        info_layout.addWidget(image_label)
-
-        # Faculty text info
-        text_layout = QVBoxLayout()
-        text_layout.setAlignment(Qt.AlignLeft)
-        text_layout.setSpacing(4)  # Increased spacing between name and department
-        text_layout.setContentsMargins(0, 0, 0, 0)  # Remove margins to maximize text space
-
-        # Faculty name - improved styling for better readability
-        name_label = QLabel(self.faculty.name)
-        name_label.setStyleSheet("""
-            font-size: 15pt;
-            font-weight: bold;
-            padding: 0;
-            margin: 0;
-        """)
-        name_label.setAlignment(Qt.AlignLeft)
-        name_label.setWordWrap(True)
-        name_label.setMinimumWidth(180)  # Ensure enough width for text
-        name_label.setMaximumWidth(200)  # Limit maximum width
-        text_layout.addWidget(name_label)
-
-        # Department - improved styling
-        dept_label = QLabel(self.faculty.department)
-        dept_label.setStyleSheet("""
-            font-size: 11pt;
-            color: #666;
-            padding: 0;
-            margin: 0;
-        """)
-        dept_label.setAlignment(Qt.AlignLeft)
-        dept_label.setWordWrap(True)
-        dept_label.setMinimumWidth(180)  # Ensure enough width for text
-        dept_label.setMaximumWidth(200)  # Limit maximum width
-        text_layout.addWidget(dept_label)
-
-        info_layout.addLayout(text_layout)
-        main_layout.addLayout(info_layout)
-
-        # Add a horizontal line separator
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        separator.setStyleSheet("background-color: #ddd; max-height: 1px;")
-        main_layout.addWidget(separator)
-
-        # Status indicator - improved layout and styling
-        status_layout = QHBoxLayout()
-        status_layout.setAlignment(Qt.AlignLeft)
-        status_layout.setSpacing(4)
-
-        status_icon = QLabel("●")
-        if self.faculty.status:
-            # No border on status icon, reduced font size
-            status_icon.setStyleSheet("font-size: 12pt; color: #4caf50; border: none;")
-            status_text = QLabel("Available")
-            # No border on status text, reduced font size
-            status_text.setStyleSheet("font-size: 11pt; color: #4caf50; border: none;")
-        else:
-            status_icon.setStyleSheet("font-size: 12pt; color: #f44336; border: none;")
-            status_text = QLabel("Unavailable")
-            status_text.setStyleSheet("font-size: 11pt; color: #f44336; border: none;")
-
-        status_layout.addWidget(status_icon)
-        status_layout.addWidget(status_text)
-        status_layout.addStretch()
-        main_layout.addLayout(status_layout)
-
-        # Request consultation button - more compact with improved styling
-        request_button = QPushButton("Request Consultation")
-        request_button.setEnabled(self.faculty.status)
-        request_button.setStyleSheet("""
-            QPushButton {
-                font-size: 10pt;
-                padding: 6px;
-                border-radius: 4px;
-                background-color: #2196F3;
-                color: white;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #1976D2;
-            }
-            QPushButton:disabled {
-                background-color: #B0BEC5;
-                color: #ECEFF1;
-            }
-        """)
-        request_button.clicked.connect(self.request_consultation)
-        main_layout.addWidget(request_button)
-
-    def _create_shadow_effect(self):
-        """
-        Create a shadow effect for the card.
-        """
-        from PyQt5.QtWidgets import QGraphicsDropShadowEffect
-        from PyQt5.QtGui import QColor
-
-        shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(10)
-        shadow.setColor(QColor(0, 0, 0, 50))
-        shadow.setOffset(0, 2)
-        return shadow
-
-    def update_style(self):
-        """
-        Update the card styling based on faculty status.
-        """
-        if self.faculty.status:
-            self.setStyleSheet('''
-                QFrame {
-                    background-color: #e8f5e9;
-                    border: 1px solid #4caf50;
-                    border-radius: 8px;
-                }
-            ''')
-        else:
-            self.setStyleSheet('''
-                QFrame {
-                    background-color: #ffebee;
-                    border: 1px solid #f44336;
-                    border-radius: 8px;
-                }
-            ''')
-
-    def update_faculty(self, faculty):
-        """
-        Update the faculty information.
-        """
-        self.faculty = faculty
-        self.update_style()
-        # Refresh the UI
-        self.setParent(None)
-        self.init_ui()
-
-    def request_consultation(self):
-        """
-        Emit signal to request a consultation with this faculty.
-        """
-        self.consultation_requested.emit(self.faculty)
 
 class ConsultationRequestForm(QFrame):
     """
@@ -421,10 +220,21 @@ class DashboardWindow(BaseWindow):
         super().__init__(parent)
         self.init_ui()
 
-        # Set up auto-refresh timer for faculty status
+        # Set up smart refresh manager for optimized faculty status updates
+        self.smart_refresh = SmartRefreshManager(base_interval=180000, max_interval=600000)
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.refresh_faculty_status)
-        self.refresh_timer.start(30000)  # Refresh every 30 seconds
+        self.refresh_timer.start(180000)  # Start with 3 minutes
+
+        # UI performance utilities
+        self.ui_batcher = get_ui_batcher()
+        self.widget_state_manager = get_widget_state_manager()
+
+        # Faculty card manager for pooling
+        self.faculty_card_manager = get_faculty_card_manager()
+
+        # Track faculty data for efficient comparison
+        self._last_faculty_hash = None
 
         # Log student info for debugging
         if student:
@@ -568,9 +378,9 @@ class DashboardWindow(BaseWindow):
 
         # Faculty grid in a scroll area with improved spacing and alignment
         self.faculty_grid = QGridLayout()
-        self.faculty_grid.setSpacing(20)  # Increased spacing between cards
+        self.faculty_grid.setSpacing(15)  # Reduced spacing between cards for better use of space
         self.faculty_grid.setAlignment(Qt.AlignTop | Qt.AlignHCenter)  # Align to top and center horizontally
-        self.faculty_grid.setContentsMargins(15, 15, 15, 15)  # Add margins around the grid
+        self.faculty_grid.setContentsMargins(10, 10, 10, 10)  # Reduced margins around the grid
 
         # Create a scroll area for the faculty grid
         faculty_scroll = QScrollArea()
@@ -648,82 +458,128 @@ class DashboardWindow(BaseWindow):
     def populate_faculty_grid(self, faculties):
         """
         Populate the faculty grid with faculty cards.
+        Optimized for performance with batch processing and reduced UI updates.
 
         Args:
             faculties (list): List of faculty objects
         """
-        # Clear existing grid
-        while self.faculty_grid.count():
-            item = self.faculty_grid.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        # Temporarily disable updates to reduce flickering and improve performance
+        self.setUpdatesEnabled(False)
 
-        # Calculate optimal number of columns based on screen width
-        screen_width = QApplication.desktop().screenGeometry().width()
+        try:
+            # Clear existing grid efficiently using pooled cards
+            self._clear_faculty_grid_pooled()
 
-        # Fixed card width (matches the width set in FacultyCard)
-        card_width = 280  # Updated to match the increased FacultyCard width
+            # Calculate optimal number of columns based on screen width
+            screen_width = QApplication.desktop().screenGeometry().width()
 
-        # Grid spacing (matches the spacing set in faculty_grid)
-        spacing = 20
+            # Fixed card width (matches the width set in FacultyCard)
+            card_width = 280  # Updated to match the improved FacultyCard width
 
-        # Get the actual width of the faculty grid container
-        grid_container_width = self.faculty_grid.parentWidget().width()
-        if grid_container_width <= 0:  # If not yet available, estimate based on screen
-            grid_container_width = int(screen_width * 0.6)  # 60% of screen for faculty grid
+            # Grid spacing (matches the spacing set in faculty_grid)
+            spacing = 15
 
-        # Account for grid margins
-        grid_container_width -= 30  # 15px left + 15px right margin
+            # Get the actual width of the faculty grid container
+            grid_container_width = self.faculty_grid.parentWidget().width()
+            if grid_container_width <= 0:  # If not yet available, estimate based on screen
+                grid_container_width = int(screen_width * 0.6)  # 60% of screen for faculty grid
 
-        # Calculate how many cards can fit in a row, accounting for spacing
-        max_cols = max(1, int(grid_container_width / (card_width + spacing)))
+            # Account for grid margins
+            grid_container_width -= 30  # 15px left + 15px right margin
 
-        # Adjust for very small screens
-        if screen_width < 800:
-            max_cols = 1  # Force single column on very small screens
+            # Calculate how many cards can fit in a row, accounting for spacing
+            max_cols = max(1, int(grid_container_width / (card_width + spacing)))
 
-        # Add faculty cards to grid with centering containers
-        row, col = 0, 0
+            # Adjust for very small screens
+            if screen_width < 800:
+                max_cols = 1  # Force single column on very small screens
 
-        for faculty in faculties:
-            # Create a container widget to center the card
-            container = QWidget()
-            container.setStyleSheet("background-color: transparent;")
-            container_layout = QHBoxLayout(container)
-            container_layout.setContentsMargins(0, 0, 0, 0)
-            container_layout.setAlignment(Qt.AlignCenter)
+            # Add faculty cards to grid with centering containers
+            row, col = 0, 0
 
-            # Create the faculty card
-            card = FacultyCard(faculty)
-            card.consultation_requested.connect(self.show_consultation_form)
+            # Create all widgets first before adding to layout (batch processing)
+            containers = []
 
-            # Add card to container
-            container_layout.addWidget(card)
+            for faculty in faculties:
+                # Create a container widget to center the card
+                container = QWidget()
+                container.setStyleSheet("background-color: transparent;")
+                container_layout = QHBoxLayout(container)
+                container_layout.setContentsMargins(0, 0, 0, 0)
+                container_layout.setAlignment(Qt.AlignCenter)
 
-            # Add container to grid
-            self.faculty_grid.addWidget(container, row, col)
+                # Convert faculty object to dictionary format expected by FacultyCard
+                faculty_data = {
+                    'id': faculty.id,
+                    'name': faculty.name,
+                    'department': faculty.department,
+                    'available': faculty.status,
+                    'email': getattr(faculty, 'email', ''),
+                    'room': getattr(faculty, 'room', None)
+                }
 
-            col += 1
-            if col >= max_cols:
-                col = 0
-                row += 1
+                # Get pooled faculty card
+                card = self.faculty_card_manager.get_faculty_card(
+                    faculty_data,
+                    consultation_callback=lambda fid, f=faculty: self.show_consultation_form(f)
+                )
 
-        # If no faculty found, show a message
-        if not faculties:
-            no_results = QLabel("No faculty members found matching your criteria")
-            no_results.setStyleSheet("""
-                font-size: 14pt;
-                color: #7f8c8d;
-                padding: 20px;
-                background-color: #f5f5f5;
-                border-radius: 10px;
-            """)
-            no_results.setAlignment(Qt.AlignCenter)
-            self.faculty_grid.addWidget(no_results, 0, 0, 1, max_cols)  # Span all columns
+                # Connect consultation signal
+                card.consultation_requested.connect(lambda fid, f=faculty: self.show_consultation_form(f))
+
+                # Add card to container
+                container_layout.addWidget(card)
+
+                # Store container for batch processing
+                containers.append((container, row, col))
+
+                col += 1
+                if col >= max_cols:
+                    col = 0
+                    row += 1
+
+            # Now add all containers to the grid at once
+            for container, r, c in containers:
+                self.faculty_grid.addWidget(container, r, c)
+
+            # If no faculty found, show a message
+            if not faculties:
+                no_results = QLabel("No faculty members found matching your criteria")
+                no_results.setStyleSheet("""
+                    font-size: 14pt;
+                    color: #7f8c8d;
+                    padding: 20px;
+                    background-color: #f5f5f5;
+                    border-radius: 10px;
+                """)
+                no_results.setAlignment(Qt.AlignCenter)
+                self.faculty_grid.addWidget(no_results, 0, 0, 1, max_cols)  # Span all columns
+
+        finally:
+            # Re-enable updates after all changes are made
+            self.setUpdatesEnabled(True)
 
     def filter_faculty(self):
         """
         Filter faculty grid based on search text and filter selection.
+        Uses a debounce mechanism to prevent excessive updates.
+        """
+        # Cancel any pending filter operation
+        if hasattr(self, '_filter_timer') and self._filter_timer.isActive():
+            self._filter_timer.stop()
+
+        # Create a new timer for debouncing
+        if not hasattr(self, '_filter_timer'):
+            self._filter_timer = QTimer(self)
+            self._filter_timer.setSingleShot(True)
+            self._filter_timer.timeout.connect(self._perform_filter)
+
+        # Start the timer - will trigger _perform_filter after 300ms
+        self._filter_timer.start(300)
+
+    def _perform_filter(self):
+        """
+        Actually perform the faculty filtering after debounce delay.
         """
         try:
             # Import faculty controller
@@ -748,6 +604,10 @@ class DashboardWindow(BaseWindow):
             # Ensure scroll area starts at the top
             if hasattr(self, 'faculty_scroll') and self.faculty_scroll:
                 self.faculty_scroll.verticalScrollBar().setValue(0)
+
+            # Update current faculty data hash for future comparisons
+            self._last_faculty_hash = self._extract_faculty_data(faculties)
+
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
@@ -756,9 +616,15 @@ class DashboardWindow(BaseWindow):
 
     def refresh_faculty_status(self):
         """
-        Refresh the faculty status from the server.
+        Refresh the faculty status from the server with optimizations to reduce loading indicators.
+        Implements adaptive refresh rate based on activity.
         """
         try:
+            # Store current scroll position to restore it later
+            current_scroll_position = 0
+            if hasattr(self, 'faculty_scroll') and self.faculty_scroll:
+                current_scroll_position = self.faculty_scroll.verticalScrollBar().value()
+
             # Import faculty controller
             from ..controllers import FacultyController
 
@@ -775,21 +641,91 @@ class DashboardWindow(BaseWindow):
                 search_term=search_text
             )
 
-            # Update the grid
+            # Use smart refresh manager for adaptive refresh rates
+            faculty_hash = self._extract_faculty_data(faculties)
+            new_interval = self.smart_refresh.update_refresh_rate(faculty_hash)
+
+            # Update timer interval if it changed
+            if new_interval != self.refresh_timer.interval():
+                self.refresh_timer.setInterval(new_interval)
+                logger.debug(f"Adjusted refresh interval to {new_interval/1000} seconds")
+
+            # Check if data has changed
+            if self._last_faculty_hash == faculty_hash:
+                logger.debug("No faculty status changes detected, skipping UI update")
+                return
+
+            # Store the new faculty data hash
+            self._last_faculty_hash = faculty_hash
+
+            # Update the grid only if there are changes or this is the first load
             self.populate_faculty_grid(faculties)
 
-            # Ensure scroll area starts at the top
+            # Restore previous scroll position instead of always scrolling to top
             if hasattr(self, 'faculty_scroll') and self.faculty_scroll:
-                self.faculty_scroll.verticalScrollBar().setValue(0)
+                self.faculty_scroll.verticalScrollBar().setValue(current_scroll_position)
 
-            # Also refresh consultation history if student is logged in
-            if self.student:
+            # Also refresh consultation history if student is logged in, but less frequently
+            import time
+
+            # Initialize last refresh time if not set
+            if self.student and not hasattr(self, '_last_history_refresh'):
+                self._last_history_refresh = time.time()
+
+            current_time = time.time()
+            # Only refresh history every 3 minutes (180 seconds) - increased from 2 minutes
+            if self.student and (current_time - getattr(self, '_last_history_refresh', 0) > 180):
                 self.consultation_panel.refresh_history()
+                self._last_history_refresh = current_time
+
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
             logger.error(f"Error refreshing faculty status: {str(e)}")
-            self.show_notification("Error refreshing faculty status", "error")
+            # Only show notification for serious errors, not for every refresh issue
+            if "Connection refused" in str(e) or "Database error" in str(e):
+                self.show_notification("Error refreshing faculty status", "error")
+
+            # Reset consecutive no-change counter on errors to ensure we don't slow down too much
+            self._consecutive_no_changes = 0
+
+    def _extract_faculty_data(self, faculties):
+        """
+        Extract relevant data from faculty objects for comparison.
+
+        Args:
+            faculties (list): List of faculty objects
+
+        Returns:
+            str: Hash of faculty data for efficient comparison
+        """
+        import hashlib
+        # Create a string representation of all relevant faculty data
+        data_str = ""
+        for f in sorted(faculties, key=lambda x: x.id):  # Sort for consistent hashing
+            data_str += f"{f.id}:{f.name}:{f.status}:{getattr(f, 'department', '')};"
+
+        # Return hash for efficient comparison
+        return hashlib.md5(data_str.encode()).hexdigest()
+
+    def _compare_faculty_data(self, old_hash, new_faculties):
+        """
+        Compare old and new faculty data to detect changes using hash comparison.
+
+        Args:
+            old_hash (str): Previous faculty data hash
+            new_faculties (list): New faculty objects
+
+        Returns:
+            bool: True if data is the same, False if there are changes
+        """
+        if old_hash is None:
+            return False  # First time, consider as changed
+
+        # Extract hash from new faculty objects
+        new_hash = self._extract_faculty_data(new_faculties)
+
+        return old_hash == new_hash
 
     def show_consultation_form(self, faculty):
         """
@@ -1058,3 +994,31 @@ class DashboardWindow(BaseWindow):
         except Exception as e:
             logger.error(f"Error simulating consultation request: {str(e)}")
             self.show_notification("Error simulating consultation request", "error")
+
+    def _clear_faculty_grid_pooled(self):
+        """
+        Clear the faculty grid efficiently using pooled cards.
+        """
+        # Return all active faculty cards to the pool
+        self.faculty_card_manager.clear_all_cards()
+
+        # Clear the grid layout
+        while self.faculty_grid.count():
+            item = self.faculty_grid.takeAt(0)
+            if item.widget():
+                # Don't delete the widget, it's managed by the pool
+                item.widget().setParent(None)
+
+    def closeEvent(self, event):
+        """
+        Handle window close event with proper cleanup.
+        """
+        # Clean up faculty card manager
+        if hasattr(self, 'faculty_card_manager'):
+            self.faculty_card_manager.clear_all_cards()
+
+        # Save splitter state before closing
+        self.save_splitter_state()
+
+        # Call parent close event
+        super().closeEvent(event)

@@ -1,12 +1,17 @@
 import logging
 import datetime
 from sqlalchemy import or_
-from ..services import get_mqtt_service
 from ..models import Faculty, get_db
+from ..utils.mqtt_utils import publish_faculty_status, subscribe_to_topic, publish_mqtt_message
 from ..utils.mqtt_topics import MQTTTopics
+from ..utils.cache_manager import cached, invalidate_faculty_cache, cache_faculty_list_key, get_cache_manager
+from ..utils.query_cache import cached_query, paginate_query, invalidate_cache_pattern
+from ..utils.validators import (
+    validate_name_safe, validate_department_safe, validate_email_safe,
+    validate_ble_id_safe, InputValidator, ValidationError
+)
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class FacultyController:
@@ -18,7 +23,6 @@ class FacultyController:
         """
         Initialize the faculty controller.
         """
-        self.mqtt_service = get_mqtt_service()
         self.callbacks = []
 
     def start(self):
@@ -27,21 +31,11 @@ class FacultyController:
         """
         logger.info("Starting Faculty controller")
 
-        # Subscribe to faculty status updates using standardized topic
-        self.mqtt_service.register_topic_handler(
-            "consultease/faculty/+/status",
-            self.handle_faculty_status_update
-        )
+        # Subscribe to faculty status updates using async MQTT service
+        subscribe_to_topic("consultease/faculty/+/status", self.handle_faculty_status_update)
 
         # Subscribe to legacy faculty desk unit status updates for backward compatibility
-        self.mqtt_service.register_topic_handler(
-            MQTTTopics.LEGACY_FACULTY_STATUS,
-            self.handle_faculty_status_update
-        )
-
-        # Connect MQTT service
-        if not self.mqtt_service.is_connected:
-            self.mqtt_service.connect()
+        subscribe_to_topic(MQTTTopics.LEGACY_FACULTY_STATUS, self.handle_faculty_status_update)
 
     def stop(self):
         """
@@ -223,7 +217,7 @@ class FacultyController:
             # Notify callbacks
             self._notify_callbacks(faculty)
 
-            # Publish a notification about faculty availability using standardized topic
+            # Publish a notification about faculty availability using async MQTT
             try:
                 notification = {
                     'type': 'faculty_status',
@@ -232,7 +226,7 @@ class FacultyController:
                     'status': status,
                     'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
                 }
-                self.mqtt_service.publish(MQTTTopics.SYSTEM_NOTIFICATIONS, notification)
+                publish_mqtt_message(MQTTTopics.SYSTEM_NOTIFICATIONS, notification)
             except Exception as e:
                 logger.error(f"Error publishing faculty status notification: {str(e)}")
 
@@ -264,6 +258,10 @@ class FacultyController:
 
             db.commit()
 
+            # Invalidate faculty cache when status changes
+            invalidate_faculty_cache()
+            invalidate_cache_pattern("get_all_faculty")
+
             logger.info(f"Updated status for faculty {faculty.name} (ID: {faculty.id}): {status}")
 
             return faculty
@@ -271,16 +269,20 @@ class FacultyController:
             logger.error(f"Error updating faculty status: {str(e)}")
             return None
 
-    def get_all_faculty(self, filter_available=None, search_term=None):
+    @cached_query(ttl=180)  # Cache for 3 minutes
+    def get_all_faculty(self, filter_available=None, search_term=None, page=None, page_size=50):
         """
         Get all faculty, optionally filtered by availability or search term.
+        Results are cached for improved performance with optional pagination.
 
         Args:
             filter_available (bool, optional): Filter by availability status
             search_term (str, optional): Search term for name or department
+            page (int, optional): Page number for pagination (1-based)
+            page_size (int): Number of items per page
 
         Returns:
-            list: List of Faculty objects
+            list or dict: List of Faculty objects, or paginated results if page is specified
         """
         try:
             db = get_db()
@@ -291,21 +293,29 @@ class FacultyController:
                 query = query.filter(Faculty.status == filter_available)
 
             if search_term:
-                search_term = f"%{search_term}%"
+                search_pattern = f"%{search_term}%"
                 query = query.filter(
                     or_(
-                        Faculty.name.ilike(search_term),
-                        Faculty.department.ilike(search_term)
+                        Faculty.name.ilike(search_pattern),
+                        Faculty.department.ilike(search_pattern)
                     )
                 )
 
-            # Execute query
-            faculties = query.all()
+            # Order by name for consistent results
+            query = query.order_by(Faculty.name)
 
+            # Return paginated results if page is specified
+            if page is not None:
+                return paginate_query(query, page, page_size)
+
+            # For backward compatibility, return all results if no pagination
+            faculties = query.all()
+            logger.debug(f"Retrieved {len(faculties)} faculty members")
             return faculties
+
         except Exception as e:
             logger.error(f"Error getting faculty list: {str(e)}")
-            return []
+            return [] if page is None else {'items': [], 'total_count': 0, 'page': 1, 'total_pages': 0}
 
     def get_faculty_by_id(self, faculty_id):
         """
@@ -351,7 +361,7 @@ class FacultyController:
 
     def add_faculty(self, name, department, email, ble_id, image_path=None, always_available=False):
         """
-        Add a new faculty member.
+        Add a new faculty member with comprehensive input validation.
 
         Args:
             name (str): Faculty name
@@ -362,9 +372,37 @@ class FacultyController:
             always_available (bool, optional): Deprecated parameter, no longer used
 
         Returns:
-            Faculty: New faculty object or None if error
+            tuple: (Faculty object or None, list of validation errors)
         """
+        validation_errors = []
+
         try:
+            # Validate all inputs
+            try:
+                name = validate_name_safe(name)
+            except ValidationError as e:
+                validation_errors.append(str(e))
+
+            try:
+                department = validate_department_safe(department)
+            except ValidationError as e:
+                validation_errors.append(str(e))
+
+            try:
+                email = validate_email_safe(email)
+            except ValidationError as e:
+                validation_errors.append(str(e))
+
+            try:
+                ble_id = validate_ble_id_safe(ble_id)
+            except ValidationError as e:
+                validation_errors.append(str(e))
+
+            # If validation failed, return errors
+            if validation_errors:
+                logger.warning(f"Faculty creation validation failed: {validation_errors}")
+                return None, validation_errors
+
             db = get_db()
 
             # Check if email or BLE ID already exists
@@ -376,8 +414,9 @@ class FacultyController:
             ).first()
 
             if existing:
-                logger.error(f"Faculty with email {email} or BLE ID {ble_id} already exists")
-                return None
+                error_msg = f"Faculty with email {email} or BLE ID {ble_id} already exists"
+                logger.error(error_msg)
+                return None, [error_msg]
 
             # Create new faculty
             faculty = Faculty(
@@ -395,6 +434,10 @@ class FacultyController:
 
             logger.info(f"Added new faculty: {faculty.name} (ID: {faculty.id})")
 
+            # Invalidate faculty cache
+            invalidate_faculty_cache()
+            invalidate_cache_pattern("get_all_faculty")
+
             # Publish a notification about the new faculty
             logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) created with BLE-based availability")
             try:
@@ -405,14 +448,15 @@ class FacultyController:
                     'status': faculty.status,
                     'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
                 }
-                self.mqtt_service.publish(MQTTTopics.SYSTEM_NOTIFICATIONS, notification)
+                publish_mqtt_message(MQTTTopics.SYSTEM_NOTIFICATIONS, notification)
             except Exception as e:
                 logger.error(f"Error publishing faculty status notification: {str(e)}")
 
-            return faculty
+            return faculty, []
         except Exception as e:
-            logger.error(f"Error adding faculty: {str(e)}")
-            return None
+            error_msg = f"Error adding faculty: {str(e)}"
+            logger.error(error_msg)
+            return None, [error_msg]
 
     def update_faculty(self, faculty_id, name=None, department=None, email=None, ble_id=None, image_path=None, always_available=None):
         """

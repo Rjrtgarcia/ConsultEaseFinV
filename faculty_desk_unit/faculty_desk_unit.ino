@@ -35,7 +35,6 @@ char mqtt_client_id[50];
 unsigned long lastBleSignalTime = 0;
 unsigned long lastStatusUpdate = 0;
 int bleReconnectAttempts = 0;
-bool alwaysAvailable = ALWAYS_AVAILABLE; // Use the value from config.h
 
 // TFT Display pins for ST7789
 #define TFT_CS    5
@@ -701,11 +700,6 @@ void setup() {
   Serial.print("Current time: ");
   Serial.println(current_date_time);
 
-  // Initialize always available mode from config
-  alwaysAvailable = ALWAYS_AVAILABLE;
-  Serial.print("Always available mode: ");
-  Serial.println(alwaysAvailable ? "ENABLED" : "DISABLED");
-
   // Initialize MQTT topics with faculty ID - both standardized and legacy
   sprintf(mqtt_topic_messages, MQTT_TOPIC_REQUESTS, FACULTY_ID);
   sprintf(mqtt_topic_status, MQTT_TOPIC_STATUS, FACULTY_ID);
@@ -946,7 +940,7 @@ void loop() {
     BLEDevice::startAdvertising();
   }
 
-  // BLE reconnection logic - improved with better handling for always available mode
+  // BLE reconnection logic - improved with better handling
   if (!deviceConnected) {
     // Check if we've lost connection for longer than the timeout
     if (currentMillis - lastBleSignalTime > BLE_CONNECTION_TIMEOUT) {

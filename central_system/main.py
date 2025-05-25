@@ -1,7 +1,6 @@
 import sys
 import os
 import logging
-import subprocess
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt, QTimer
 
@@ -27,6 +26,9 @@ from central_system.controllers import (
     ConsultationController,
     AdminController
 )
+
+# Import async MQTT service
+from central_system.services.async_mqtt_service import get_async_mqtt_service
 
 # Import views
 from central_system.views import (
@@ -114,6 +116,11 @@ class ConsultEaseApp:
 
         # Initialize database
         init_db()
+
+        # Initialize async MQTT service
+        logger.info("Initializing async MQTT service")
+        self.async_mqtt_service = get_async_mqtt_service()
+        self.async_mqtt_service.start()
 
         # Initialize controllers
         self.rfid_controller = RFIDController()
@@ -226,6 +233,11 @@ class ConsultEaseApp:
         Clean up resources before exiting.
         """
         logger.info("Cleaning up ConsultEase application")
+
+        # Stop async MQTT service
+        if hasattr(self, 'async_mqtt_service') and self.async_mqtt_service:
+            logger.info("Stopping async MQTT service")
+            self.async_mqtt_service.stop()
 
         # Stop controllers
         self.rfid_controller.stop()

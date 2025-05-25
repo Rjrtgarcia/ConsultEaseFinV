@@ -111,7 +111,7 @@ class AdminDashboardWindow(BaseWindow):
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
-        # Style the scroll area to match the application theme
+        # Style the scroll area with improved visibility and touch-friendliness
         scroll_area.setStyleSheet("""
             QScrollArea {
                 border: none;
@@ -120,16 +120,16 @@ class AdminDashboardWindow(BaseWindow):
             QScrollBar:vertical {
                 border: none;
                 background: #f0f0f0;
-                width: 12px;
+                width: 15px;  /* Increased width for better touch targets */
                 margin: 0px;
             }
             QScrollBar::handle:vertical {
-                background: #c0c0c0;
-                min-height: 20px;
-                border-radius: 6px;
+                background: #adb5bd;  /* Darker color for better visibility */
+                min-height: 30px;  /* Increased minimum height for better touch targets */
+                border-radius: 7px;
             }
             QScrollBar::handle:vertical:hover {
-                background: #a0a0a0;
+                background: #868e96;  /* Even darker on hover */
             }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0px;
@@ -254,7 +254,7 @@ class FacultyManagementTab(QWidget):
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
-        # Style the scroll area to match the application theme
+        # Style the scroll area with improved visibility and touch-friendliness
         scroll_area.setStyleSheet("""
             QScrollArea {
                 border: none;
@@ -263,16 +263,16 @@ class FacultyManagementTab(QWidget):
             QScrollBar:vertical {
                 border: none;
                 background: #f0f0f0;
-                width: 12px;
+                width: 15px;  /* Increased width for better touch targets */
                 margin: 0px;
             }
             QScrollBar::handle:vertical {
-                background: #c0c0c0;
-                min-height: 20px;
-                border-radius: 6px;
+                background: #adb5bd;  /* Darker color for better visibility */
+                min-height: 30px;  /* Increased minimum height for better touch targets */
+                border-radius: 7px;
             }
             QScrollBar::handle:vertical:hover {
-                background: #a0a0a0;
+                background: #868e96;  /* Even darker on hover */
             }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0px;

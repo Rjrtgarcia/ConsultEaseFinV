@@ -38,25 +38,28 @@ class ConsultationRequestForm(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
         self.setObjectName("consultation_request_form")
 
-        # Apply theme-based stylesheet with improved readability
+        # Apply theme-based stylesheet with further improved readability
         self.setStyleSheet('''
             QFrame#consultation_request_form {
                 background-color: #f8f9fa;
                 border: 1px solid #dee2e6;
                 border-radius: 10px;
-                padding: 15px;
+                padding: 20px;
             }
             QLabel {
-                font-size: 15pt;
+                font-size: 16pt;
                 color: #212529;
+                font-weight: 500;
+                margin-bottom: 5px;
             }
             QLineEdit, QTextEdit, QComboBox {
                 border: 2px solid #4dabf7;
                 border-radius: 5px;
-                padding: 12px;
+                padding: 15px;
                 background-color: white;
-                font-size: 15pt;
+                font-size: 16pt;
                 color: #212529;
+                margin: 5px 0;
             }
             QLineEdit:focus, QTextEdit:focus, QComboBox:focus {
                 border: 2px solid #228be6;
@@ -64,10 +67,11 @@ class ConsultationRequestForm(QFrame):
             }
             QPushButton {
                 border-radius: 5px;
-                padding: 12px 20px;
-                font-size: 15pt;
+                padding: 15px 25px;
+                font-size: 16pt;
                 font-weight: bold;
                 color: white;
+                margin: 10px 0;
             }
             QPushButton:hover {
                 opacity: 0.9;
@@ -466,13 +470,13 @@ class ConsultationHistoryPanel(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
         self.setObjectName("consultation_history_panel")
 
-        # Apply theme-based stylesheet with improved readability
+        # Apply theme-based stylesheet with further improved readability
         self.setStyleSheet('''
             QFrame#consultation_history_panel {
                 background-color: #f8f9fa;
                 border: 1px solid #dee2e6;
                 border-radius: 10px;
-                padding: 15px;
+                padding: 20px;
             }
             QTableWidget {
                 border: 1px solid #dee2e6;
@@ -480,19 +484,19 @@ class ConsultationHistoryPanel(QFrame):
                 background-color: white;
                 alternate-background-color: #f1f3f5;
                 gridline-color: #dee2e6;
-                font-size: 15pt;
+                font-size: 16pt;
                 color: #212529;
             }
             QTableWidget::item {
-                padding: 10px;
+                padding: 12px;
                 border-bottom: 1px solid #e9ecef;
             }
             QHeaderView::section {
                 background-color: #228be6;
                 color: white;
-                padding: 12px;
+                padding: 15px;
                 border: none;
-                font-size: 15pt;
+                font-size: 16pt;
                 font-weight: bold;
             }
             QHeaderView::section:first {
@@ -500,6 +504,20 @@ class ConsultationHistoryPanel(QFrame):
             }
             QHeaderView::section:last {
                 border-top-right-radius: 5px;
+            }
+            /* Improve scrollbar visibility */
+            QScrollBar:vertical {
+                background: #f1f3f5;
+                width: 15px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #adb5bd;
+                min-height: 30px;
+                border-radius: 7px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #868e96;
             }
             QPushButton {
                 border-radius: 5px;

@@ -275,19 +275,28 @@ class ConsultEaseTheme:
                 padding: {cls.PADDING_SMALL}px;
             }}
 
-            QFrame.facultyCard {{
+            /* Faculty Card Styling - Improved according to user preferences */
+            QFrame#faculty_card_available {{
+                background-color: #f8fff9;
+                border: 1px solid {cls.SUCCESS_COLOR};
                 border-radius: {cls.BORDER_RADIUS_LARGE}px;
+                margin: 8px;
                 padding: {cls.PADDING_NORMAL}px;
             }}
 
-            QFrame.facultyCard[available="true"] {{
-                background-color: #e8f5e9;
-                border: 2px solid {cls.SUCCESS_COLOR};
+            QFrame#faculty_card_unavailable {{
+                background-color: #fff8f8;
+                border: 1px solid {cls.ERROR_COLOR};
+                border-radius: {cls.BORDER_RADIUS_LARGE}px;
+                margin: 8px;
+                padding: {cls.PADDING_NORMAL}px;
             }}
 
-            QFrame.facultyCard[available="false"] {{
-                background-color: #ffebee;
-                border: 2px solid {cls.ERROR_COLOR};
+            /* Faculty Card Text Elements - No borders as per user preference */
+            QFrame#faculty_card_available QLabel,
+            QFrame#faculty_card_unavailable QLabel {{
+                border: none;
+                background: transparent;
             }}
         """
 

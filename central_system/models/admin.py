@@ -65,9 +65,12 @@ class Admin(Base):
         if not has_special:
             return False, "Password must contain at least one special character"
 
-        # Check for common patterns
-        if re.search(r'123|abc|qwerty|password|admin', password.lower()):
-            return False, "Password contains common patterns that are easy to guess"
+        # Check for common patterns - only reject if they make up most of the password
+        common_patterns = ['123', 'abc', 'qwerty', 'password', 'admin']
+        for pattern in common_patterns:
+            # Only reject if the pattern makes up more than 50% of the password
+            if pattern in password.lower() and len(pattern) > len(password) / 2:
+                return False, "Password relies too heavily on common patterns that are easy to guess"
 
         return True, "Password meets strength requirements"
 

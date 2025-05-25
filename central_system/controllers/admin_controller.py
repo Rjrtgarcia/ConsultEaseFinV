@@ -1,8 +1,8 @@
 import logging
 from ..models import Admin, get_db
+from ..utils.config_manager import validate_password
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class AdminController:
@@ -48,23 +48,30 @@ class AdminController:
 
     def create_admin(self, username, password):
         """
-        Create a new admin user.
+        Create a new admin user with password validation.
 
         Args:
             username (str): Admin username
             password (str): Admin password
 
         Returns:
-            Admin: New admin object or None if error
+            tuple: (Admin object or None, list of validation errors)
         """
         try:
+            # Validate password
+            is_valid, validation_errors = validate_password(password)
+            if not is_valid:
+                logger.warning(f"Password validation failed for admin {username}: {validation_errors}")
+                return None, validation_errors
+
             db = get_db()
 
             # Check if username already exists
             existing = db.query(Admin).filter(Admin.username == username).first()
             if existing:
-                logger.error(f"Admin with username {username} already exists")
-                return None
+                error_msg = f"Admin with username {username} already exists"
+                logger.error(error_msg)
+                return None, [error_msg]
 
             # Hash password
             password_hash, salt = Admin.hash_password(password)
@@ -82,10 +89,11 @@ class AdminController:
 
             logger.info(f"Created new admin: {admin.username} (ID: {admin.id})")
 
-            return admin
+            return admin, []
         except Exception as e:
-            logger.error(f"Error creating admin: {str(e)}")
-            return None
+            error_msg = f"Error creating admin: {str(e)}"
+            logger.error(error_msg)
+            return None, [error_msg]
 
     def get_all_admins(self):
         """
@@ -104,7 +112,7 @@ class AdminController:
 
     def change_password(self, admin_id, old_password, new_password):
         """
-        Change an admin user's password.
+        Change an admin user's password with validation.
 
         Args:
             admin_id (int): Admin ID
@@ -112,20 +120,28 @@ class AdminController:
             new_password (str): New password
 
         Returns:
-            bool: True if successful, False otherwise
+            tuple: (bool success, list of validation errors)
         """
         try:
+            # Validate new password
+            is_valid, validation_errors = validate_password(new_password)
+            if not is_valid:
+                logger.warning(f"New password validation failed for admin {admin_id}: {validation_errors}")
+                return False, validation_errors
+
             db = get_db()
             admin = db.query(Admin).filter(Admin.id == admin_id).first()
 
             if not admin:
-                logger.error(f"Admin not found: {admin_id}")
-                return False
+                error_msg = f"Admin not found: {admin_id}"
+                logger.error(error_msg)
+                return False, [error_msg]
 
             # Verify old password
             if not admin.check_password(old_password):
-                logger.warning(f"Invalid old password for admin: {admin.username}")
-                return False
+                error_msg = f"Invalid old password for admin: {admin.username}"
+                logger.warning(error_msg)
+                return False, [error_msg]
 
             # Hash new password
             password_hash, salt = Admin.hash_password(new_password)
@@ -138,10 +154,11 @@ class AdminController:
 
             logger.info(f"Changed password for admin: {admin.username}")
 
-            return True
+            return True, []
         except Exception as e:
-            logger.error(f"Error changing admin password: {str(e)}")
-            return False
+            error_msg = f"Error changing admin password: {str(e)}"
+            logger.error(error_msg)
+            return False, [error_msg]
 
     def change_username(self, admin_id, password, new_username):
         """
@@ -282,16 +299,20 @@ class AdminController:
             if admin_count == 0:
                 logger.info("No admin users found, creating default admin")
 
-                # Create default admin
+                # Create default admin with stronger password
                 default_username = "admin"
-                default_password = "admin123"  # Should be changed immediately
+                default_password = "Admin123!"  # Meets password requirements
 
-                self.create_admin(default_username, default_password)
+                admin, errors = self.create_admin(default_username, default_password)
 
-                logger.warning(
-                    "Created default admin user with username 'admin' and password 'admin123'. "
-                    "Please change this password immediately!"
-                )
+                if admin:
+                    logger.warning(
+                        "Created default admin user with username 'admin' and password 'Admin123!'. "
+                        "Please change this password immediately!"
+                    )
+                else:
+                    logger.error(f"Failed to create default admin: {errors}")
+                    return False
 
                 return True
 

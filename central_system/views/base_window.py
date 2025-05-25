@@ -200,127 +200,36 @@ class BaseWindow(QMainWindow):
 
     def _toggle_keyboard(self):
         """
-        Toggle the on-screen keyboard visibility.
-        This method is connected to both the F5 key and the keyboard toggle button.
-        Prioritizes squeekboard over onboard.
+        Toggle the on-screen keyboard visibility using the improved keyboard manager.
+        This replaces the complex 123-line method with a clean, maintainable approach.
         """
-        # Get the keyboard handler from the application
-        app = QApplication.instance()
-        if not app:
-            logger.warning("Could not get application instance for keyboard toggle")
-            return
+        try:
+            # Import the keyboard manager
+            from central_system.utils.keyboard_manager import get_keyboard_manager
 
-        # Try multiple methods to toggle the keyboard
+            # Get the keyboard manager instance
+            keyboard_manager = get_keyboard_manager()
 
-        # Method 1: Use direct keyboard integration (preferred)
-        direct_keyboard = None
-        if hasattr(app, 'direct_keyboard'):
-            direct_keyboard = app.direct_keyboard
-            logger.info("Using direct keyboard integration for toggle")
+            # Toggle the keyboard
+            success = keyboard_manager.toggle_keyboard()
 
-            if direct_keyboard:
-                if hasattr(direct_keyboard, 'keyboard_visible') and direct_keyboard.keyboard_visible:
-                    logger.info("Manually hiding keyboard via direct integration")
-                    direct_keyboard.hide_keyboard()
-                    # Update button text
-                    if hasattr(self, 'keyboard_toggle_button'):
-                        self.keyboard_toggle_button.setText("⌨ Show Keyboard")
-                else:
-                    logger.info("Manually showing keyboard via direct integration")
-                    direct_keyboard.show_keyboard()
-                    # Update button text
-                    if hasattr(self, 'keyboard_toggle_button'):
-                        self.keyboard_toggle_button.setText("⌨ Hide Keyboard")
-                return
-
-        # Method 2: Use keyboard handler
-        keyboard_handler = None
-        if hasattr(app, 'keyboard_handler'):
-            keyboard_handler = app.keyboard_handler
-        else:
-            # Find the keyboard handler in the application's event filters
-            for obj in app.children():
-                if hasattr(obj, '__class__') and obj.__class__.__name__ == 'KeyboardHandler':
-                    keyboard_handler = obj
-                    break
-
-        # If we found a keyboard handler, toggle the keyboard
-        if keyboard_handler:
-            if hasattr(keyboard_handler, 'keyboard_visible') and keyboard_handler.keyboard_visible:
-                logger.info("Manually hiding keyboard via keyboard handler")
-                keyboard_handler.hide_keyboard()
-                # Update button text
-                if hasattr(self, 'keyboard_toggle_button'):
-                    self.keyboard_toggle_button.setText("⌨ Show Keyboard")
-            else:
-                logger.info("Manually showing keyboard via keyboard handler")
-                keyboard_handler.force_show_keyboard()
-                # Update button text
-                if hasattr(self, 'keyboard_toggle_button'):
+            # Update button text based on current state
+            if hasattr(self, 'keyboard_toggle_button'):
+                if keyboard_manager.keyboard_visible:
                     self.keyboard_toggle_button.setText("⌨ Hide Keyboard")
-            return
+                else:
+                    self.keyboard_toggle_button.setText("⌨ Show Keyboard")
 
-        # Method 3: Direct DBus call for squeekboard (fallback)
-        try:
-            import subprocess
-            import sys
+            if success:
+                logger.info(f"Keyboard toggled successfully using {keyboard_manager.get_active_strategy_name()}")
+            else:
+                logger.warning("Failed to toggle keyboard")
 
-            if sys.platform.startswith('linux'):
-                # Check if squeekboard is visible
-                check_cmd = [
-                    "dbus-send", "--print-reply", "--type=method_call",
-                    "--dest=sm.puri.OSK0", "/sm/puri/OSK0", "sm.puri.OSK0.GetVisible"
-                ]
-
-                try:
-                    result = subprocess.run(check_cmd, capture_output=True, text=True)
-                    is_visible = "boolean true" in result.stdout
-
-                    if is_visible:
-                        # Hide squeekboard
-                        hide_cmd = [
-                            "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
-                            "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:false"
-                        ]
-                        subprocess.Popen(hide_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        logger.info("Manually hiding squeekboard via direct DBus call")
-                        # Update button text
-                        if hasattr(self, 'keyboard_toggle_button'):
-                            self.keyboard_toggle_button.setText("⌨ Show Keyboard")
-                    else:
-                        # Show squeekboard
-                        show_cmd = [
-                            "dbus-send", "--type=method_call", "--dest=sm.puri.OSK0",
-                            "/sm/puri/OSK0", "sm.puri.OSK0.SetVisible", "boolean:true"
-                        ]
-                        subprocess.Popen(show_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        logger.info("Manually showing squeekboard via direct DBus call")
-                        # Update button text
-                        if hasattr(self, 'keyboard_toggle_button'):
-                            self.keyboard_toggle_button.setText("⌨ Hide Keyboard")
-                    return
-                except Exception as e:
-                    logger.error(f"Error toggling squeekboard via DBus: {e}")
         except Exception as e:
-            logger.error(f"Error with direct DBus method: {e}")
-
-        # Method 4: Use keyboard scripts (last resort)
-        try:
-            import os
-            import subprocess
-
-            # Try using the keyboard-toggle.sh script if it exists
-            home_dir = os.path.expanduser("~")
-            script_path = os.path.join(home_dir, "keyboard-toggle.sh")
-            if os.path.exists(script_path):
-                logger.info("Using keyboard-toggle.sh script")
-                subprocess.Popen([script_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                return
-        except Exception as e:
-            logger.error(f"Error using keyboard toggle script: {e}")
-
-        # If we got here, we couldn't toggle the keyboard
-        logger.warning("Could not find any method to toggle the keyboard")
+            logger.error(f"Error toggling keyboard: {e}")
+            # Fallback to showing a message
+            if hasattr(self, 'keyboard_toggle_button'):
+                self.keyboard_toggle_button.setText("⌨ Keyboard Error")
 
 
 

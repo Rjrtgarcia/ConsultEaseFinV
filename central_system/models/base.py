@@ -9,9 +9,19 @@ import logging
 import time
 import functools
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Set up logging (configuration handled centrally in main.py)
 logger = logging.getLogger(__name__)
+
+
+class DatabaseConnectionError(Exception):
+    """Custom exception for database connection failures."""
+    pass
+
+
+class DatabaseOperationError(Exception):
+    """Custom exception for database operation failures."""
+    pass
+
 
 # Import configuration system
 from ..config import get_config
@@ -83,35 +93,66 @@ SessionLocal = scoped_session(session_factory)
 # Create base class for models
 Base = declarative_base()
 
-def get_db(force_new=False):
+def get_db(force_new=False, max_retries=3):
     """
-    Get database session from the connection pool.
+    Get database session from the connection pool with enhanced error handling.
 
     Args:
         force_new (bool): If True, create a new session even if one exists
+        max_retries (int): Maximum number of retry attempts for connection failures
 
     Returns:
         SQLAlchemy session: A database session from the connection pool
+
+    Raises:
+        DatabaseConnectionError: When unable to establish database connection
     """
-    try:
-        # Get a session from the pool
-        db = SessionLocal()
+    last_error = None
 
-        # If force_new is True, ensure we're getting fresh data
-        if force_new:
-            # Expire all objects in the session to force a refresh from the database
-            db.expire_all()
+    for attempt in range(max_retries):
+        try:
+            # Get a session from the pool
+            db = SessionLocal()
 
-        # Log connection acquisition for debugging
-        logger.debug("Acquired database connection from pool")
+            # Test the connection with a simple query
+            try:
+                db.execute("SELECT 1")
+                logger.debug(f"Database connection test successful (attempt {attempt + 1})")
+            except Exception as test_error:
+                db.close()
+                raise DatabaseConnectionError(f"Database connection test failed: {test_error}")
 
-        return db
-    except Exception as e:
-        logger.error(f"Error getting database connection: {str(e)}")
-        # If we got a session but there was an error, make sure to close it
-        if 'db' in locals():
-            db.close()
-        raise e
+            # If force_new is True, ensure we're getting fresh data
+            if force_new:
+                # Expire all objects in the session to force a refresh from the database
+                db.expire_all()
+
+            # Log connection acquisition for debugging
+            logger.debug(f"Acquired database connection from pool (attempt {attempt + 1})")
+
+            return db
+
+        except Exception as e:
+            last_error = e
+            logger.warning(f"Database connection attempt {attempt + 1}/{max_retries} failed: {str(e)}")
+
+            # If we got a session but there was an error, make sure to close it
+            if 'db' in locals():
+                try:
+                    db.close()
+                except:
+                    pass  # Ignore errors during cleanup
+
+            # Wait before retrying (exponential backoff)
+            if attempt < max_retries - 1:
+                wait_time = min(2 ** attempt, 10)  # Max 10 seconds
+                logger.info(f"Waiting {wait_time} seconds before retry...")
+                time.sleep(wait_time)
+
+    # All retries failed
+    error_msg = f"Failed to establish database connection after {max_retries} attempts. Last error: {last_error}"
+    logger.error(error_msg)
+    raise DatabaseConnectionError(error_msg)
 
 def close_db():
     """
@@ -171,12 +212,73 @@ def db_operation_with_retry(max_retries=3, retry_delay=0.5):
 
     return decorator
 
+def _create_performance_indexes():
+    """
+    Create database indexes for frequently queried fields to improve performance.
+    This is especially important for Raspberry Pi deployment where query speed matters.
+    """
+    try:
+        # Get database connection
+        db = get_db()
+
+        # Define indexes for performance optimization
+        indexes = [
+            # Student table indexes
+            "CREATE INDEX IF NOT EXISTS idx_student_rfid_uid ON students(rfid_uid);",
+            "CREATE INDEX IF NOT EXISTS idx_student_name ON students(name);",
+            "CREATE INDEX IF NOT EXISTS idx_student_department ON students(department);",
+
+            # Faculty table indexes
+            "CREATE INDEX IF NOT EXISTS idx_faculty_ble_id ON faculty(ble_id);",
+            "CREATE INDEX IF NOT EXISTS idx_faculty_status ON faculty(status);",
+            "CREATE INDEX IF NOT EXISTS idx_faculty_department ON faculty(department);",
+            "CREATE INDEX IF NOT EXISTS idx_faculty_name ON faculty(name);",
+
+            # Consultation table indexes
+            "CREATE INDEX IF NOT EXISTS idx_consultation_student_id ON consultations(student_id);",
+            "CREATE INDEX IF NOT EXISTS idx_consultation_faculty_id ON consultations(faculty_id);",
+            "CREATE INDEX IF NOT EXISTS idx_consultation_status ON consultations(status);",
+            "CREATE INDEX IF NOT EXISTS idx_consultation_created_at ON consultations(created_at);",
+
+            # Admin table indexes
+            "CREATE INDEX IF NOT EXISTS idx_admin_username ON admins(username);",
+            "CREATE INDEX IF NOT EXISTS idx_admin_is_active ON admins(is_active);",
+
+            # Composite indexes for common query patterns
+            "CREATE INDEX IF NOT EXISTS idx_consultation_student_status ON consultations(student_id, status);",
+            "CREATE INDEX IF NOT EXISTS idx_consultation_faculty_status ON consultations(faculty_id, status);",
+            "CREATE INDEX IF NOT EXISTS idx_faculty_status_department ON faculty(status, department);",
+        ]
+
+        # Execute index creation
+        for index_sql in indexes:
+            try:
+                db.execute(index_sql)
+                logger.debug(f"Created index: {index_sql.split()[5]}")  # Extract index name
+            except Exception as e:
+                # Log but don't fail - indexes might already exist
+                logger.debug(f"Index creation skipped (likely already exists): {e}")
+
+        db.commit()
+        logger.info("Database performance indexes created successfully")
+
+    except Exception as e:
+        logger.error(f"Error creating performance indexes: {e}")
+        if 'db' in locals():
+            db.rollback()
+    finally:
+        if 'db' in locals():
+            db.close()
+
 def init_db():
     """
-    Initialize database tables and create default data if needed.
+    Initialize database tables, create indexes, and create default data if needed.
     """
     # Create tables
     Base.metadata.create_all(bind=engine)
+
+    # Create performance indexes for frequently queried fields
+    _create_performance_indexes()
 
     # Check if we need to create default data
     db = get_db()
@@ -190,7 +292,7 @@ def init_db():
         admin_count = db.query(Admin).count()
         if admin_count == 0:
             # Create default admin with bcrypt hashed password
-            password_hash, salt = Admin.hash_password("admin123")
+            password_hash, salt = Admin.hash_password("Admin123!")
             default_admin = Admin(
                 username="admin",
                 password_hash=password_hash,
@@ -199,7 +301,7 @@ def init_db():
                 is_active=True
             )
             db.add(default_admin)
-            logger.info("Created default admin user: admin / admin123")
+            logger.info("Created default admin user: admin / Admin123!")
 
         # Check if faculty table is empty
         faculty_count = db.query(Faculty).count()
