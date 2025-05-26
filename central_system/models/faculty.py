@@ -112,7 +112,7 @@ class Faculty(Base):
     @staticmethod
     def validate_ble_id(ble_id):
         """
-        Validate BLE ID format.
+        Validate BLE ID format (UUID or MAC address).
 
         Args:
             ble_id (str): BLE ID to validate
@@ -125,10 +125,32 @@ class Faculty(Base):
 
         # Check for UUID format
         uuid_pattern = r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-        # Check for MAC address format
+        # Check for MAC address format (supports both : and - separators)
         mac_pattern = r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$'
 
         return bool(re.match(uuid_pattern, ble_id) or re.match(mac_pattern, ble_id))
+
+    @staticmethod
+    def normalize_mac_address(mac_address):
+        """
+        Normalize MAC address format to uppercase with colon separators.
+
+        Args:
+            mac_address (str): MAC address to normalize
+
+        Returns:
+            str: Normalized MAC address or original if not a MAC address
+        """
+        if not mac_address or not isinstance(mac_address, str):
+            return mac_address
+
+        # Check if it's a MAC address format
+        mac_pattern = r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$'
+        if re.match(mac_pattern, mac_address):
+            # Convert to uppercase and use colon separators
+            return mac_address.upper().replace('-', ':')
+
+        return mac_address
 
     @classmethod
     def create(cls, db, name, department, email, ble_id=None, **kwargs):

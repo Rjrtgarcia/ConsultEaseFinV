@@ -79,11 +79,69 @@ class FacultyController:
         faculty_name = None
 
         # Handle different topic formats
-        if topic == MQTTTopics.LEGACY_FACULTY_STATUS:
+        if topic.endswith("/mac_status"):
+            # This is a MAC address status update from the faculty desk unit
+            # Extract faculty ID from topic: consultease/faculty/{faculty_id}/mac_status
+            try:
+                faculty_id = int(topic.split("/")[2])
+
+                if isinstance(data, dict):
+                    status_str = data.get("status", "")
+                    detected_mac = data.get("mac", "")
+
+                    if status_str == "faculty_present":
+                        status = True
+                        logger.info(f"Faculty {faculty_id} detected via MAC address: {detected_mac}")
+                    elif status_str == "faculty_absent":
+                        status = False
+                        logger.info(f"Faculty {faculty_id} no longer detected via MAC address")
+                    else:
+                        logger.warning(f"Unknown MAC status: {status_str}")
+                        return
+
+                    # Update faculty status in database
+                    faculty = self.update_faculty_status(faculty_id, status)
+
+                    if faculty:
+                        # Store the detected MAC address if present
+                        if detected_mac and status:
+                            # Normalize the MAC address
+                            normalized_mac = Faculty.normalize_mac_address(detected_mac)
+                            if normalized_mac != faculty.ble_id:
+                                logger.info(f"Updating faculty {faculty_id} BLE ID from {faculty.ble_id} to {normalized_mac}")
+                                # Update the BLE ID with the detected MAC address
+                                db = get_db()
+                                faculty.ble_id = normalized_mac
+                                db.commit()
+
+                        # Notify callbacks
+                        self._notify_callbacks(faculty)
+
+                        # Publish notification
+                        try:
+                            notification = {
+                                'type': 'faculty_mac_status',
+                                'faculty_id': faculty.id,
+                                'faculty_name': faculty.name,
+                                'status': status,
+                                'detected_mac': detected_mac,
+                                'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
+                            }
+                            publish_mqtt_message(MQTTTopics.SYSTEM_NOTIFICATIONS, notification)
+                        except Exception as e:
+                            logger.error(f"Error publishing MAC status notification: {str(e)}")
+
+                    return
+
+            except (ValueError, IndexError) as e:
+                logger.error(f"Error parsing MAC status topic {topic}: {str(e)}")
+                return
+
+        elif topic == MQTTTopics.LEGACY_FACULTY_STATUS:
             # This is from the faculty desk unit using the legacy topic
             # Check if this is a string message (keychain_connected or keychain_disconnected)
             if isinstance(data, str):
-                if data == "keychain_connected":
+                if data == "keychain_connected" or data == "faculty_present":
                     status = True
                     # Extract faculty name from client ID (DeskUnit_FacultyName)
                     # This is more flexible than hardcoding a specific faculty name
@@ -91,6 +149,10 @@ class FacultyController:
 
                     # Try to find the faculty from the MQTT client ID if available
                     # If not available, look for faculty with BLE beacons configured
+                    faculty = None
+                elif data == "keychain_disconnected" or data == "faculty_absent":
+                    status = False
+                    db = get_db()
                     faculty = None
 
                     # First, try to find any faculty with BLE configured and status=False

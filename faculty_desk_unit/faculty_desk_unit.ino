@@ -4,6 +4,8 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <BLEScan.h>
+#include <BLEAdvertisedDevice.h>
 #include <SPI.h>
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <Adafruit_ST7789.h> // Hardware-specific library for ST7789
@@ -31,10 +33,30 @@ char mqtt_client_id[50];
 #define SERVICE_UUID        "91BAD35B-F3CB-4FC1-8603-88D5137892A6"
 #define CHARACTERISTIC_UUID "D9473AA3-E6F4-424B-B6E7-A5F94FDDA285"
 
-// BLE Connection Management
+// Faculty MAC Addresses Definition
+const char* FACULTY_MAC_ADDRESSES[MAX_FACULTY_MAC_ADDRESSES] = {
+  "11:22:33:44:55:66",  // Dr. John Smith's device
+  "AA:BB:CC:DD:EE:FF",  // Dr. Jane Doe's device
+  "4F:AF:C2:01:1F:B5",  // Prof. Robert Chen's device
+  "12:34:56:78:9A:BC",  // Jeysibn's device (matches FACULTY_ID 3)
+  ""                    // Empty slot for additional faculty
+};
+
+// BLE Connection Management (Legacy - for backward compatibility)
 unsigned long lastBleSignalTime = 0;
 unsigned long lastStatusUpdate = 0;
 int bleReconnectAttempts = 0;
+
+// MAC Address Detection Variables
+BLEScan* pBLEScan = nullptr;
+bool facultyPresent = false;
+bool oldFacultyPresent = false;
+unsigned long lastMacDetectionTime = 0;
+unsigned long lastBleScanTime = 0;
+int macDetectionCount = 0;
+int macAbsenceCount = 0;
+String detectedFacultyMac = "";
+String lastDetectedMac = "";
 
 // TFT Display pins for ST7789
 #define TFT_CS    5
@@ -207,6 +229,207 @@ String processMessage(String message) {
 
   // If not JSON, return the original message
   return message;
+}
+
+// MAC Address Detection Functions
+String normalizeMacAddress(String mac) {
+  // Convert MAC address to uppercase and ensure consistent format
+  mac.toUpperCase();
+  mac.replace("-", ":");
+  return mac;
+}
+
+bool isFacultyMacAddress(String mac) {
+  // Normalize the detected MAC address
+  String normalizedMac = normalizeMacAddress(mac);
+
+  // Check against known faculty MAC addresses
+  for (int i = 0; i < MAX_FACULTY_MAC_ADDRESSES; i++) {
+    if (strlen(FACULTY_MAC_ADDRESSES[i]) > 0) {
+      String knownMac = normalizeMacAddress(String(FACULTY_MAC_ADDRESSES[i]));
+      if (normalizedMac.equals(knownMac)) {
+        Serial.print("Matched faculty MAC: ");
+        Serial.print(normalizedMac);
+        Serial.print(" (Known as: ");
+        Serial.print(knownMac);
+        Serial.println(")");
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// BLE Scan Callback Class
+class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
+    void onResult(BLEAdvertisedDevice advertisedDevice) {
+      String deviceMac = advertisedDevice.getAddress().toString().c_str();
+      int rssi = advertisedDevice.getRSSI();
+
+      // Check if this is a faculty member's device
+      if (isFacultyMacAddress(deviceMac) && rssi > BLE_RSSI_THRESHOLD) {
+        Serial.print("Faculty device detected: ");
+        Serial.print(deviceMac);
+        Serial.print(" RSSI: ");
+        Serial.println(rssi);
+
+        // Update detection variables
+        detectedFacultyMac = deviceMac;
+        lastMacDetectionTime = millis();
+        macDetectionCount++;
+        macAbsenceCount = 0; // Reset absence counter
+      }
+    }
+};
+
+void initializeBLEScanner() {
+  Serial.println("Initializing BLE Scanner for MAC address detection...");
+
+  // Initialize BLE
+  BLEDevice::init("ConsultEase-Faculty-Scanner");
+
+  // Create BLE Scanner
+  pBLEScan = BLEDevice::getScan();
+  pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
+  pBLEScan->setActiveScan(MAC_SCAN_ACTIVE);
+  pBLEScan->setInterval(100);
+  pBLEScan->setWindow(99);
+
+  Serial.println("BLE Scanner initialized");
+  displaySystemStatus("BLE Scanner ready");
+}
+
+void performBLEScan() {
+  if (pBLEScan == nullptr) {
+    Serial.println("BLE Scanner not initialized");
+    return;
+  }
+
+  unsigned long currentTime = millis();
+
+  // Only scan at specified intervals
+  if (currentTime - lastBleScanTime < BLE_SCAN_INTERVAL) {
+    return;
+  }
+
+  lastBleScanTime = currentTime;
+
+  Serial.println("Starting BLE scan for faculty devices...");
+  displaySystemStatus("Scanning for faculty...");
+
+  // Clear previous detection for this scan
+  String previousDetectedMac = detectedFacultyMac;
+  detectedFacultyMac = "";
+
+  // Perform scan
+  BLEScanResults foundDevices = pBLEScan->start(BLE_SCAN_DURATION, false);
+
+  // Check if we detected any faculty member
+  bool currentScanDetected = (detectedFacultyMac.length() > 0);
+
+  if (currentScanDetected) {
+    Serial.print("Faculty detected in scan: ");
+    Serial.println(detectedFacultyMac);
+  } else {
+    Serial.println("No faculty devices detected in scan");
+    macAbsenceCount++;
+  }
+
+  // Clear scan results to free memory
+  pBLEScan->clearResults();
+
+  // Update faculty presence based on debouncing logic
+  updateFacultyPresenceStatus();
+
+  Serial.print("Scan complete. Found ");
+  Serial.print(foundDevices.getCount());
+  Serial.println(" devices total");
+}
+
+void updateFacultyPresenceStatus() {
+  bool newFacultyPresent = false;
+
+  // Determine presence based on recent detections and debouncing
+  if (macDetectionCount >= MAC_DETECTION_DEBOUNCE) {
+    // Faculty has been consistently detected
+    newFacultyPresent = true;
+  } else if (macAbsenceCount >= MAC_DETECTION_DEBOUNCE) {
+    // Faculty has been consistently absent
+    newFacultyPresent = false;
+  } else {
+    // Not enough consistent readings, maintain current state
+    newFacultyPresent = facultyPresent;
+  }
+
+  // Check for timeout (faculty left without proper detection)
+  unsigned long currentTime = millis();
+  if (facultyPresent && (currentTime - lastMacDetectionTime > MAC_DETECTION_TIMEOUT)) {
+    Serial.println("Faculty presence timeout - marking as absent");
+    newFacultyPresent = false;
+    macAbsenceCount = MAC_DETECTION_DEBOUNCE; // Force absence state
+  }
+
+  // Update status if changed
+  if (newFacultyPresent != facultyPresent) {
+    oldFacultyPresent = facultyPresent;
+    facultyPresent = newFacultyPresent;
+
+    // Reset counters when state changes
+    macDetectionCount = 0;
+    macAbsenceCount = 0;
+
+    // Update last detected MAC for status reporting
+    if (facultyPresent) {
+      lastDetectedMac = detectedFacultyMac;
+    }
+
+    Serial.print("Faculty presence changed: ");
+    Serial.println(facultyPresent ? "PRESENT" : "ABSENT");
+
+    // Publish status change via MQTT
+    publishFacultyStatus();
+  }
+}
+
+void publishFacultyStatus() {
+  if (!mqttClient.connected()) {
+    Serial.println("MQTT not connected, cannot publish status");
+    return;
+  }
+
+  const char* status_message;
+  String detailed_status;
+
+  if (facultyPresent) {
+    status_message = "faculty_present";
+    detailed_status = "Faculty detected via MAC: " + lastDetectedMac;
+
+    // Also send legacy format for backward compatibility
+    mqttClient.publish(mqtt_topic_status, "keychain_connected");
+    mqttClient.publish(mqtt_topic_legacy_status, "keychain_connected");
+
+    Serial.println("Published faculty present status");
+    displaySystemStatus("Faculty Present");
+  } else {
+    status_message = "faculty_absent";
+    detailed_status = "No faculty MAC detected";
+
+    // Also send legacy format for backward compatibility
+    mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
+    mqttClient.publish(mqtt_topic_legacy_status, "keychain_disconnected");
+
+    Serial.println("Published faculty absent status");
+    displaySystemStatus("Faculty Absent");
+  }
+
+  // Publish detailed status with MAC address information
+  String statusTopic = "consultease/faculty/" + String(FACULTY_ID) + "/mac_status";
+  String statusPayload = "{\"status\":\"" + String(status_message) + "\",\"mac\":\"" + lastDetectedMac + "\",\"timestamp\":" + String(millis()) + "}";
+
+  mqttClient.publish(statusTopic.c_str(), statusPayload.c_str());
+
+  Serial.print("Published detailed status: ");
+  Serial.println(statusPayload);
 }
 
 // Function to draw the continuous gold accent bar
@@ -782,55 +1005,80 @@ void setup() {
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(callback);
 
-  // Create the BLE Device with faculty name
-  char ble_device_name[50];
-  sprintf(ble_device_name, "ProfDeskUnit_%s", FACULTY_NAME);
-  BLEDevice::init(ble_device_name);
-  Serial.print("BLE Device initialized: ");
-  Serial.println(ble_device_name);
+  // Initialize BLE Scanner for MAC address detection
+  if (BLE_DETECTION_MODE_MAC_ADDRESS) {
+    Serial.println("Initializing MAC address-based faculty detection...");
+    initializeBLEScanner();
 
-  // Create the BLE Server
-  pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
+    // Initialize MAC detection variables
+    facultyPresent = false;
+    oldFacultyPresent = false;
+    lastMacDetectionTime = 0;
+    lastBleScanTime = 0;
+    macDetectionCount = 0;
+    macAbsenceCount = 0;
+    detectedFacultyMac = "";
+    lastDetectedMac = "";
 
-  // Create the BLE Service
-  BLEService *pService = pServer->createService(SERVICE_UUID);
+    // Publish initial status to MQTT (both standardized and legacy topics)
+    mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
+    mqttClient.publish(mqtt_topic_legacy_status, "keychain_disconnected");
+    Serial.println("MAC address detection ready, scanning for faculty devices");
+    displaySystemStatus("Scanning for faculty...");
+  } else {
+    // Legacy BLE server mode (for backward compatibility)
+    Serial.println("Using legacy BLE server mode...");
 
-  // Create a BLE Characteristic
-  pCharacteristic = pService->createCharacteristic(
-                      CHARACTERISTIC_UUID,
-                      BLECharacteristic::PROPERTY_READ   |
-                      BLECharacteristic::PROPERTY_WRITE  |
-                      BLECharacteristic::PROPERTY_NOTIFY |
-                      BLECharacteristic::PROPERTY_INDICATE
-                    );
+    // Create the BLE Device with faculty name
+    char ble_device_name[50];
+    sprintf(ble_device_name, "ProfDeskUnit_%s", FACULTY_NAME);
+    BLEDevice::init(ble_device_name);
+    Serial.print("BLE Device initialized: ");
+    Serial.println(ble_device_name);
 
-  // Create a BLE Descriptor
-  pCharacteristic->addDescriptor(new BLE2902());
+    // Create the BLE Server
+    pServer = BLEDevice::createServer();
+    pServer->setCallbacks(new MyServerCallbacks());
 
-  // Start the service
-  pService->start();
+    // Create the BLE Service
+    BLEService *pService = pServer->createService(SERVICE_UUID);
 
-  // Start advertising
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->setScanResponse(false);
-  pAdvertising->setMinPreferred(0x0);
-  BLEDevice::startAdvertising();
+    // Create a BLE Characteristic
+    pCharacteristic = pService->createCharacteristic(
+                        CHARACTERISTIC_UUID,
+                        BLECharacteristic::PROPERTY_READ   |
+                        BLECharacteristic::PROPERTY_WRITE  |
+                        BLECharacteristic::PROPERTY_NOTIFY |
+                        BLECharacteristic::PROPERTY_INDICATE
+                      );
 
-  Serial.println("BLE Server ready!");
-  displaySystemStatus("BLE Server ready");
+    // Create a BLE Descriptor
+    pCharacteristic->addDescriptor(new BLE2902());
 
-  // Initialize connection status
-  deviceConnected = false;
-  oldDeviceConnected = false;
-  lastBleSignalTime = millis();  // Initialize the last BLE signal time
+    // Start the service
+    pService->start();
 
-  // Publish initial status to MQTT (both standardized and legacy topics)
-  mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
-  mqttClient.publish(mqtt_topic_legacy_status, "keychain_disconnected");
-  Serial.println("BLE server ready, waiting for keychain connection");
-  displaySystemStatus("Waiting for keychain...");
+    // Start advertising
+    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+    pAdvertising->addServiceUUID(SERVICE_UUID);
+    pAdvertising->setScanResponse(false);
+    pAdvertising->setMinPreferred(0x0);
+    BLEDevice::startAdvertising();
+
+    Serial.println("BLE Server ready!");
+    displaySystemStatus("BLE Server ready");
+
+    // Initialize connection status
+    deviceConnected = false;
+    oldDeviceConnected = false;
+    lastBleSignalTime = millis();  // Initialize the last BLE signal time
+
+    // Publish initial status to MQTT (both standardized and legacy topics)
+    mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
+    mqttClient.publish(mqtt_topic_legacy_status, "keychain_disconnected");
+    Serial.println("BLE server ready, waiting for keychain connection");
+    displaySystemStatus("Waiting for keychain...");
+  }
 
   // Update time display
   updateTimeDisplay();
@@ -884,9 +1132,14 @@ void loop() {
   // Process MQTT messages
   mqttClient.loop();
 
-  // BLE connection management with improved reliability
-  // Handle BLE connection state changes
-  if (deviceConnected && !oldDeviceConnected) {
+  // MAC Address Detection (if enabled)
+  if (BLE_DETECTION_MODE_MAC_ADDRESS) {
+    // Perform BLE scanning for faculty MAC addresses
+    performBLEScan();
+  } else {
+    // Legacy BLE connection management with improved reliability
+    // Handle BLE connection state changes
+    if (deviceConnected && !oldDeviceConnected) {
     // Just connected
     oldDeviceConnected = deviceConnected;
     Serial.println("BLE client connected - updating status");
@@ -1037,7 +1290,7 @@ void loop() {
     } else {
       displaySystemStatus("BLE disconnected");
     }
-  }
+  } // End of legacy BLE mode else block
 
   // Update time display every minute
   if (currentMillis - lastTimeUpdate > 60000) {

@@ -23,10 +23,21 @@
 #define FACULTY_NAME "Jeysibn"  // This should match the faculty name in the database
 #define FACULTY_DEPARTMENT "Computer Science"  // This should match the faculty department in the database
 
-// BLE Configuration
+// BLE Configuration - MAC Address Detection
 #define BLE_SCAN_INTERVAL 5000  // Scan interval in milliseconds
 #define BLE_SCAN_DURATION 3     // Scan duration in seconds
 #define BLE_RSSI_THRESHOLD -80  // RSSI threshold for presence detection (higher values = closer proximity required)
+#define BLE_DETECTION_MODE_MAC_ADDRESS true  // Use MAC address detection instead of connection-based
+
+// Faculty MAC Addresses - Add known faculty device MAC addresses here
+// Format: "XX:XX:XX:XX:XX:XX" (case insensitive)
+#define MAX_FACULTY_MAC_ADDRESSES 5
+extern const char* FACULTY_MAC_ADDRESSES[MAX_FACULTY_MAC_ADDRESSES];
+
+// MAC Address Detection Settings
+#define MAC_DETECTION_TIMEOUT 30000    // Time in ms to consider faculty absent if MAC not detected
+#define MAC_SCAN_ACTIVE true           // Use active scanning (more power but better detection)
+#define MAC_DETECTION_DEBOUNCE 3       // Number of consecutive scans needed to confirm presence/absence
 
 // Display Configuration
 #define TFT_ROTATION 1  // 0=Portrait, 1=Landscape, 2=Inverted Portrait, 3=Inverted Landscape

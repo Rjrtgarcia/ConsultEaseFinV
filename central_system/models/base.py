@@ -306,29 +306,37 @@ def init_db():
         # Check if faculty table is empty
         faculty_count = db.query(Faculty).count()
         if faculty_count == 0:
-            # Create some sample faculty
+            # Create some sample faculty with MAC addresses for testing
             sample_faculty = [
                 Faculty(
                     name="Dr. John Smith",
                     department="Computer Science",
                     email="john.smith@university.edu",
-                    ble_id="11:22:33:44:55:66",
+                    ble_id="11:22:33:44:55:66",  # MAC address format
                     status=True  # Set to True to make Dr. John Smith available for testing
                 ),
                 Faculty(
                     name="Dr. Jane Doe",
                     department="Mathematics",
                     email="jane.doe@university.edu",
-                    ble_id="AA:BB:CC:DD:EE:FF",
+                    ble_id="AA:BB:CC:DD:EE:FF",  # MAC address format
                     status=False
                 ),
                 Faculty(
                     name="Prof. Robert Chen",
                     department="Computer Science",
                     email="robert.chen@university.edu",
-                    ble_id="4fafc201-1fb5-459e-8fcc-c5c9c331914b",  # Match the SERVICE_UUID in the faculty desk unit code
+                    ble_id="4F:AF:C2:01:1F:B5",  # MAC address format (matches config.h)
                     status=True,  # Set to available for testing
                     always_available=True  # This faculty member is always available (BLE always on)
+                ),
+                Faculty(
+                    name="Jeysibn",
+                    department="Computer Science",
+                    email="jeysibn@university.edu",
+                    ble_id="12:34:56:78:9A:BC",  # MAC address format for the configured faculty
+                    status=False,  # Will be updated by MAC detection
+                    always_available=False
                 )
             ]
             db.add_all(sample_faculty)
