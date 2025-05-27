@@ -312,11 +312,31 @@ class AdminLoginWindow(BaseWindow):
         Check if this is a first-time setup and show account creation dialog if needed.
         """
         try:
-            if self.admin_controller and self.admin_controller.is_first_time_setup():
-                logger.info("First-time setup detected - no admin accounts found")
+            logger.info("🔍 Checking for first-time setup...")
+
+            if not self.admin_controller:
+                logger.warning("⚠️  No admin controller available for first-time setup check")
+                return
+
+            # Check admin accounts exist
+            accounts_exist = self.admin_controller.check_admin_accounts_exist()
+            logger.info(f"📊 Admin accounts exist: {accounts_exist}")
+
+            # Check if first-time setup is needed
+            is_first_time = self.admin_controller.is_first_time_setup()
+            logger.info(f"🎯 Is first-time setup: {is_first_time}")
+
+            if is_first_time:
+                logger.info("✅ First-time setup detected - no admin accounts found")
+                logger.info("🎭 Showing first-time setup dialog...")
                 self.show_first_time_setup_dialog()
+            else:
+                logger.info("📋 Admin accounts exist - first-time setup not needed")
+
         except Exception as e:
-            logger.error(f"Error checking first-time setup: {e}")
+            logger.error(f"❌ Error checking first-time setup: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             # Continue with normal login if check fails
 
     def show_first_time_setup_dialog(self):
@@ -324,13 +344,21 @@ class AdminLoginWindow(BaseWindow):
         Show the first-time setup dialog for creating an admin account.
         """
         try:
+            logger.info("🎭 Creating AdminAccountCreationDialog...")
             dialog = AdminAccountCreationDialog(self)
-            dialog.account_created.connect(self.handle_account_created)
+            logger.info("✅ AdminAccountCreationDialog created successfully")
 
+            logger.info("🔗 Connecting account_created signal...")
+            dialog.account_created.connect(self.handle_account_created)
+            logger.info("✅ Signal connected successfully")
+
+            logger.info("📱 Showing first-time setup dialog...")
             # Show the dialog
             result = dialog.exec_()
+            logger.info(f"📋 Dialog result: {result}")
 
             if result == dialog.Rejected:
+                logger.info("❌ User cancelled first-time setup")
                 # User cancelled - show message and allow manual login attempt
                 QMessageBox.information(
                     self,
@@ -339,9 +367,13 @@ class AdminLoginWindow(BaseWindow):
                     "You can still try to login if an admin account exists, "
                     "or restart the application to run setup again."
                 )
+            else:
+                logger.info("✅ First-time setup dialog completed")
 
         except Exception as e:
-            logger.error(f"Error showing first-time setup dialog: {e}")
+            logger.error(f"❌ Error showing first-time setup dialog: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             QMessageBox.critical(
                 self,
                 "Setup Error",

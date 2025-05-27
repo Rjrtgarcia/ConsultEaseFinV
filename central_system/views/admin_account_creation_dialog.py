@@ -478,8 +478,7 @@ class AdminAccountCreationDialog(QDialog):
                 # Emit success signal with admin info
                 admin_info = {
                     'id': new_admin.id,
-                    'username': new_admin.username,
-                    'email': new_admin.email
+                    'username': new_admin.username
                 }
 
                 # Show success message

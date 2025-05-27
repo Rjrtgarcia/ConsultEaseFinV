@@ -458,16 +458,36 @@ def init_db():
     _create_performance_indexes()
     logger.info("✅ Performance indexes created/verified")
 
-    # Ensure admin account integrity (critical for system access)
-    logger.info("🔐 Performing admin account integrity check...")
-    admin_ready = _ensure_admin_account_integrity()
+    # Check admin account status but don't auto-create for first-time setup
+    logger.info("🔐 Checking admin account status...")
 
-    if not admin_ready:
-        logger.error("❌ CRITICAL: Admin account setup failed!")
-        logger.error("❌ System may not be accessible through admin interface!")
-        # Don't fail completely - continue with other initialization
-    else:
-        logger.info("✅ Admin account is ready for use")
+    try:
+        from .admin import Admin
+        db = get_db()
+        admin_count = db.query(Admin).count()
+
+        if admin_count == 0:
+            logger.info("📋 No admin accounts found - first-time setup will be available")
+            logger.info("🎯 Users can create admin accounts through the first-time setup dialog")
+        else:
+            logger.info(f"✅ Found {admin_count} admin account(s) in database")
+            # Only run integrity check if accounts exist
+            admin_ready = _ensure_admin_account_integrity()
+            if not admin_ready:
+                logger.warning("⚠️  Admin account integrity issues detected")
+            else:
+                logger.info("✅ Admin accounts are ready for use")
+
+        db.close()
+
+    except Exception as e:
+        logger.error(f"❌ Error checking admin account status: {e}")
+        # In case of error, run the integrity check as fallback
+        logger.info("🔧 Running admin account integrity check as fallback...")
+        admin_ready = _ensure_admin_account_integrity()
+        if not admin_ready:
+            logger.error("❌ CRITICAL: Admin account setup failed!")
+            logger.error("❌ System may not be accessible through admin interface!")
 
     # Check if we need to create default data
     db = get_db()
