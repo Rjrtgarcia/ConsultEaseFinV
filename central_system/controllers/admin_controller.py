@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 class AdminController:
     """
     Controller for handling admin authentication and management.
+    Enhanced with first-time setup detection and account creation.
     """
 
     def __init__(self):
@@ -15,6 +16,7 @@ class AdminController:
         Initialize the admin controller.
         """
         self.current_admin = None
+        self._admin_accounts_exist = None  # Cache for admin existence check
 
     def authenticate(self, username, password):
         """
@@ -66,6 +68,145 @@ class AdminController:
         except Exception as e:
             logger.error(f"Error authenticating admin: {str(e)}")
             return None
+
+    def check_admin_accounts_exist(self, force_refresh=False):
+        """
+        Check if any admin accounts exist in the database.
+
+        Args:
+            force_refresh (bool): Force refresh of cached result
+
+        Returns:
+            bool: True if admin accounts exist, False otherwise
+        """
+        if self._admin_accounts_exist is None or force_refresh:
+            try:
+                db = get_db()
+                admin_count = db.query(Admin).count()
+                self._admin_accounts_exist = admin_count > 0
+
+                logger.info(f"Admin accounts check: {admin_count} accounts found")
+                return self._admin_accounts_exist
+
+            except Exception as e:
+                logger.error(f"Error checking admin accounts: {e}")
+                # Assume accounts exist to avoid unnecessary prompts on error
+                self._admin_accounts_exist = True
+                return True
+
+        return self._admin_accounts_exist
+
+    def check_valid_admin_accounts_exist(self):
+        """
+        Check if any valid (active) admin accounts exist in the database.
+
+        Returns:
+            bool: True if valid admin accounts exist, False otherwise
+        """
+        try:
+            db = get_db()
+            valid_admin_count = db.query(Admin).filter(Admin.is_active == True).count()
+
+            logger.info(f"Valid admin accounts check: {valid_admin_count} active accounts found")
+            return valid_admin_count > 0
+
+        except Exception as e:
+            logger.error(f"Error checking valid admin accounts: {e}")
+            return False
+
+    def is_first_time_setup(self):
+        """
+        Determine if this is a first-time setup (no admin accounts exist).
+
+        Returns:
+            bool: True if first-time setup is needed, False otherwise
+        """
+        return not self.check_admin_accounts_exist()
+
+    def create_admin_account(self, username, password, email=None, force_password_change=False):
+        """
+        Create a new admin account with enhanced validation and error handling.
+
+        Args:
+            username (str): Admin username
+            password (str): Admin password
+            email (str, optional): Admin email
+            force_password_change (bool): Whether to force password change on first login
+
+        Returns:
+            dict: Result with success status and admin info, or error message
+        """
+        try:
+            db = get_db()
+
+            # Check if username already exists
+            existing_admin = db.query(Admin).filter(Admin.username == username).first()
+            if existing_admin:
+                logger.warning(f"Attempted to create admin with existing username: {username}")
+                return {
+                    'success': False,
+                    'error': 'Username already exists'
+                }
+
+            # Validate password strength
+            is_valid, error_message = Admin.validate_password_strength(password)
+            if not is_valid:
+                logger.warning(f"Password validation failed for new admin {username}: {error_message}")
+                return {
+                    'success': False,
+                    'error': error_message
+                }
+
+            # Create the admin account
+            password_hash, salt = Admin.hash_password(password)
+            new_admin = Admin(
+                username=username,
+                password_hash=password_hash,
+                salt=salt,
+                email=email,
+                is_active=True,
+                force_password_change=force_password_change
+            )
+
+            db.add(new_admin)
+            db.commit()
+
+            # Verify the account was created correctly
+            if new_admin.check_password(password):
+                logger.info(f"Successfully created admin account: {username}")
+
+                # Clear the cache since we now have admin accounts
+                self._admin_accounts_exist = True
+
+                # Log the account creation
+                try:
+                    from ..utils.audit_logger import log_admin_action
+                    log_admin_action(username, "account_created", details="Admin account created successfully")
+                except ImportError:
+                    logger.info("Audit logger not available, skipping audit log")
+
+                return {
+                    'success': True,
+                    'admin': {
+                        'id': new_admin.id,
+                        'username': new_admin.username,
+                        'email': new_admin.email,
+                        'is_active': new_admin.is_active
+                    }
+                }
+            else:
+                logger.error(f"Admin account created but password verification failed: {username}")
+                return {
+                    'success': False,
+                    'error': 'Account created but password verification failed'
+                }
+
+        except Exception as e:
+            logger.error(f"Error creating admin account {username}: {e}")
+            return {
+                'success': False,
+                'error': f'Failed to create account: {str(e)}'
+            }
 
     def create_admin(self, username, password):
         """

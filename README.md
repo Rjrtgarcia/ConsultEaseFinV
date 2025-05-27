@@ -85,41 +85,95 @@ python central_system/main.py
 
 ## Admin Access
 
-ConsultEase includes integrated admin account management that automatically ensures a working admin account is always available.
+ConsultEase includes an enhanced admin account management system that ensures users can always gain admin access through multiple fallback mechanisms.
 
-### Default Admin Credentials
+### Enhanced Admin Account Management
 
-The system automatically creates and maintains a default admin account:
+The system provides **multiple layers** of admin account management:
 
+1. **Automatic Database Creation** - Creates default admin during database initialization
+2. **First-Time Setup Dialog** - User-friendly account creation if no accounts exist
+3. **Manual Login** - Traditional login with enhanced error handling
+4. **Emergency Repair** - Automatic repair of corrupted accounts
+
+### First-Time Setup Experience
+
+When no admin accounts exist, the system automatically displays a **user-friendly setup dialog**:
+
+#### Features:
+- 🖥️ **Touch-Optimized Interface** - Designed for Raspberry Pi touchscreen
+- 🔒 **Real-Time Password Validation** - Visual feedback on password requirements
+- ✅ **Instant Verification** - Username uniqueness and strength checking
+- 🎯 **Auto-Login** - Automatic login after successful account creation
+- 📱 **On-Screen Keyboard** - Automatic keyboard display for input fields
+
+#### Password Requirements:
+- ✅ At least 8 characters long
+- ✅ Contains uppercase letters (A-Z)
+- ✅ Contains lowercase letters (a-z)
+- ✅ Contains numbers (0-9)
+- ✅ Contains special characters (!@#$%^&*)
+- ✅ Passwords must match
+
+### Accessing the Admin Dashboard
+
+#### Option 1: First-Time Setup (No Admin Accounts)
+1. **Start the application**
+2. **Click "Admin Login"** button
+3. **Follow the first-time setup dialog** (appears automatically)
+4. **Create your admin account** with a secure password
+5. **Automatically login** to the admin dashboard
+
+#### Option 2: Existing Admin Account
+1. **Start the application**
+2. **Click "Admin Login"** button
+3. **Enter your credentials**
+4. **Access the admin dashboard**
+
+#### Option 3: Default Admin (Fallback)
+If automatic systems create a default admin:
 ```
 Username: admin
 Password: TempPass123!
 ```
-
-**Important Security Notes:**
-- ⚠️ This is a **temporary password** that MUST be changed on first login
-- 🔒 The system enforces **strong password requirements** for new passwords
-- 📝 All admin actions are **logged for audit purposes**
-- 🔧 Admin account issues are **automatically repaired** during system startup
-
-### Accessing the Admin Dashboard
-
-1. **Start the application** - The system will automatically verify/create the admin account
-2. **Touch the screen** to activate the interface
-3. **Click "Admin Login"** button
-4. **Enter credentials**: `admin` / `TempPass123!`
-5. **Change password** when prompted (required for security)
-6. **Access full admin functionality**
+**Note:** This password must be changed on first login for security.
 
 ### Admin Account Features
 
-- ✅ **Automatic Creation**: Admin account is created automatically if it doesn't exist
-- ✅ **Self-Repair**: System fixes broken admin accounts during startup
-- ✅ **Security Enforcement**: Forced password changes and strong password requirements
-- ✅ **Comprehensive Logging**: All admin operations are logged for audit trails
-- ✅ **Zero Configuration**: No manual setup required - works out of the box
+#### Multi-Layer Security:
+- ✅ **Strong Password Requirements** - Enforced complexity rules
+- ✅ **Secure Password Storage** - bcrypt hashing with salt
+- ✅ **Account Validation** - Real-time username and password checking
+- ✅ **Audit Logging** - Complete audit trail of all admin operations
 
-The system startup logs will show the admin account status and provide login instructions.
+#### User Experience:
+- ✅ **Touch-Friendly Interface** - Optimized for touchscreen devices
+- ✅ **Clear Visual Feedback** - Real-time validation indicators
+- ✅ **Intuitive Setup Process** - Step-by-step guidance
+- ✅ **Error Recovery** - Multiple fallback mechanisms
+
+#### System Reliability:
+- ✅ **Automatic Creation** - Admin accounts created automatically when needed
+- ✅ **Self-Repair** - System fixes broken admin accounts during startup
+- ✅ **Multiple Fallbacks** - Several methods ensure admin access is always possible
+- ✅ **Zero Configuration** - Works out of the box without manual setup
+
+### Testing the System
+
+You can test the admin account management system:
+
+```bash
+# Run the test script
+python test_admin_account_management.py
+```
+
+This will verify:
+- Admin account creation and authentication
+- Password validation
+- First-time setup detection
+- UI component functionality
+
+The enhanced system ensures **100% reliable admin access** through multiple redundant mechanisms!
 
 ### Faculty Desk Unit
 

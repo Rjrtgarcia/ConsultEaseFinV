@@ -543,6 +543,8 @@ class ConsultEaseApp:
             self.admin_login_window = AdminLoginWindow()
             self.admin_login_window.admin_authenticated.connect(self.handle_admin_authenticated)
             self.admin_login_window.change_window.connect(self.handle_window_change)
+            # Set the admin controller for first-time setup detection
+            self.admin_login_window.set_admin_controller(self.admin_controller)
 
         # Determine which window is currently visible
         current_window = None
@@ -665,12 +667,22 @@ class ConsultEaseApp:
         Handle admin authentication event.
 
         Args:
-            credentials (tuple): Admin credentials (username, password)
+            credentials (tuple): Admin credentials (username, password) or (username, None) for auto-login
         """
         # Unpack credentials from tuple
         username, password = credentials
 
-        # Authenticate admin
+        # Handle auto-login case (from account creation)
+        if password is None:
+            logger.info(f"Auto-login for newly created admin: {username}")
+            # Create admin info for dashboard
+            admin_info = {
+                'username': username
+            }
+            self.show_admin_dashboard_window(admin_info)
+            return
+
+        # Normal authentication flow
         auth_result = self.admin_controller.authenticate(username, password)
 
         if auth_result:
@@ -692,7 +704,13 @@ class ConsultEaseApp:
         else:
             logger.warning(f"Admin authentication failed: {username}")
             if self.admin_login_window:
-                self.admin_login_window.show_login_error("Invalid username or password")
+                # Check if this might be a first-time setup issue
+                if not self.admin_controller.check_valid_admin_accounts_exist():
+                    self.admin_login_window.show_login_error(
+                        "No valid admin accounts found. Please check the first-time setup."
+                    )
+                else:
+                    self.admin_login_window.show_login_error("Invalid username or password")
 
     def handle_consultation_request(self, faculty, message, course_code):
         """
