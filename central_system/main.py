@@ -834,7 +834,7 @@ class ConsultEaseApp:
                     "Critical Error",
                     "Failed to load password change dialog. The application will exit."
                 )
-                self.quit()
+                self.app.quit()
 
     def handle_window_change(self, window_name, data=None):
         """

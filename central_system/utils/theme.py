@@ -410,3 +410,144 @@ class ConsultEaseTheme:
                 font-weight: bold;
             }}
         """
+
+    @classmethod
+    def get_dialog_stylesheet(cls):
+        """
+        Get the stylesheet for dialog windows (password change, etc.).
+        """
+        return f"""
+            /* Dialog window styling */
+            QDialog {{
+                background-color: {cls.BG_PRIMARY};
+                color: {cls.TEXT_PRIMARY};
+                font-family: 'Segoe UI', Roboto, Ubuntu, 'Open Sans', sans-serif;
+            }}
+
+            /* Dialog headers */
+            QLabel#headerLabel {{
+                font-size: {cls.FONT_SIZE_XXLARGE}pt;
+                font-weight: bold;
+                color: {cls.PRIMARY_COLOR};
+                margin-bottom: {cls.PADDING_LARGE}px;
+            }}
+
+            QLabel#subtitleLabel {{
+                font-size: {cls.FONT_SIZE_NORMAL}pt;
+                color: {cls.TEXT_SECONDARY};
+                margin-bottom: {cls.PADDING_NORMAL}px;
+            }}
+
+            /* Form elements */
+            QLineEdit {{
+                border: 2px solid #bdc3c7;
+                border-radius: {cls.BORDER_RADIUS_NORMAL}px;
+                padding: {cls.PADDING_NORMAL}px;
+                background-color: white;
+                font-size: {cls.FONT_SIZE_NORMAL}pt;
+                min-height: {cls.TOUCH_MIN_HEIGHT}px;
+            }}
+
+            QLineEdit:focus {{
+                border: 2px solid {cls.PRIMARY_COLOR};
+            }}
+
+            QLabel {{
+                font-size: {cls.FONT_SIZE_NORMAL}pt;
+                color: {cls.TEXT_PRIMARY};
+                margin-bottom: {cls.PADDING_SMALL}px;
+            }}
+
+            /* Buttons */
+            QPushButton {{
+                background-color: {cls.PRIMARY_COLOR};
+                color: white;
+                border: none;
+                border-radius: {cls.BORDER_RADIUS_NORMAL}px;
+                padding: {cls.PADDING_NORMAL}px {cls.PADDING_LARGE}px;
+                font-size: {cls.FONT_SIZE_NORMAL}pt;
+                font-weight: bold;
+                min-width: 100px;
+                min-height: {cls.TOUCH_MIN_HEIGHT}px;
+            }}
+
+            QPushButton:hover {{
+                background-color: #1a4b7c;
+            }}
+
+            QPushButton:pressed {{
+                background-color: #072a4f;
+            }}
+
+            QPushButton:disabled {{
+                background-color: #bdc3c7;
+                color: #7f8c8d;
+            }}
+
+            QPushButton#cancelButton {{
+                background-color: {cls.ERROR_COLOR};
+            }}
+
+            QPushButton#cancelButton:hover {{
+                background-color: #c0392b;
+            }}
+
+            QPushButton#submitButton {{
+                background-color: {cls.SUCCESS_COLOR};
+            }}
+
+            QPushButton#submitButton:hover {{
+                background-color: #27ae60;
+            }}
+
+            /* Requirements section */
+            QFrame#requirementsFrame {{
+                background-color: {cls.BG_SECONDARY};
+                border: 1px solid #bdc3c7;
+                border-radius: {cls.BORDER_RADIUS_NORMAL}px;
+                padding: {cls.PADDING_NORMAL}px;
+                margin: {cls.PADDING_NORMAL}px 0;
+            }}
+
+            QLabel#requirementLabel {{
+                font-size: {cls.FONT_SIZE_SMALL}pt;
+                margin: 2px 0;
+            }}
+
+            /* Progress indicators */
+            QProgressBar {{
+                border: 1px solid #bdc3c7;
+                border-radius: {cls.BORDER_RADIUS_SMALL}px;
+                background-color: #f0f0f0;
+                text-align: center;
+                min-height: 20px;
+            }}
+
+            QProgressBar::chunk {{
+                background-color: {cls.SUCCESS_COLOR};
+                border-radius: {cls.BORDER_RADIUS_SMALL}px;
+            }}
+
+            /* Checkboxes */
+            QCheckBox {{
+                font-size: {cls.FONT_SIZE_NORMAL}pt;
+                spacing: {cls.PADDING_SMALL}px;
+            }}
+
+            QCheckBox::indicator {{
+                width: 18px;
+                height: 18px;
+            }}
+
+            QCheckBox::indicator:unchecked {{
+                border: 2px solid #bdc3c7;
+                border-radius: 3px;
+                background-color: white;
+            }}
+
+            QCheckBox::indicator:checked {{
+                border: 2px solid {cls.SUCCESS_COLOR};
+                border-radius: 3px;
+                background-color: {cls.SUCCESS_COLOR};
+            }}
+        """
