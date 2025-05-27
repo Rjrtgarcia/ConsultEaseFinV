@@ -232,29 +232,73 @@ bool isFacultyMacAddress(String mac) {
   return false;
 }
 
-// BLE Scan Callback Class
+// BLE Scan Callback Class with Enhanced Debugging
 class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice advertisedDevice) {
       String deviceMac = advertisedDevice.getAddress().toString().c_str();
       int rssi = advertisedDevice.getRSSI();
+      String deviceName = "";
 
-      // Check if this is a faculty member's device
-      if (isFacultyMacAddress(deviceMac) && rssi > BLE_RSSI_THRESHOLD) {
-        Serial.print("Faculty device detected: ");
+      // Get device name if available
+      if (advertisedDevice.haveName()) {
+        deviceName = advertisedDevice.getName().c_str();
+      }
+
+      // Log all detected devices for debugging
+      Serial.print("BLE Device: ");
+      Serial.print(deviceMac);
+      Serial.print(" | RSSI: ");
+      Serial.print(rssi);
+      Serial.print(" dBm | Name: ");
+      Serial.print(deviceName.length() > 0 ? deviceName : "Unknown");
+
+      // Show additional device information
+      if (advertisedDevice.haveServiceUUID()) {
+        Serial.print(" | Service: ");
+        Serial.print(advertisedDevice.getServiceUUID().toString().c_str());
+      }
+
+      if (advertisedDevice.haveManufacturerData()) {
+        Serial.print(" | Mfg Data: Yes");
+      }
+
+      Serial.println();
+
+      // Check if this is our target faculty beacon
+      bool isTargetBeacon = isFacultyMacAddress(deviceMac);
+      bool rssiAcceptable = (rssi > BLE_RSSI_THRESHOLD);
+
+      if (isTargetBeacon) {
+        Serial.print("*** TARGET BEACON FOUND: ");
         Serial.print(deviceMac);
-        Serial.print(" RSSI: ");
-        Serial.println(rssi);
+        Serial.print(" | RSSI: ");
+        Serial.print(rssi);
+        Serial.print(" dBm | Threshold: ");
+        Serial.print(BLE_RSSI_THRESHOLD);
+        Serial.print(" dBm | ");
+        Serial.println(rssiAcceptable ? "RSSI OK" : "RSSI TOO WEAK");
 
-        // Update detection variables
-        detectedFacultyMac = deviceMac;
-        lastMacDetectionTime = millis();
-        macDetectionCount++;
-        macAbsenceCount = 0; // Reset absence counter
+        if (rssiAcceptable) {
+          // Update detection variables
+          detectedFacultyMac = deviceMac;
+          lastMacDetectionTime = millis();
+          macDetectionCount++;
+          macAbsenceCount = 0; // Reset absence counter
+
+          Serial.print("Faculty presence detected: ");
+          Serial.print(FACULTY_NAME);
+          Serial.print(" (Detection count: ");
+          Serial.print(macDetectionCount);
+          Serial.println(")");
+        } else {
+          Serial.println("Target beacon found but RSSI too weak - not counting as detection");
+        }
       }
     }
 };
 
 void initializeBLEScanner() {
+  Serial.println("=== BLE Scanner Initialization ===");
   Serial.println("Initializing BLE Scanner for nRF51822 beacon detection...");
   Serial.print("Assigned Faculty: ");
   Serial.print(FACULTY_NAME);
@@ -264,24 +308,59 @@ void initializeBLEScanner() {
   Serial.print("Target Beacon MAC: ");
   Serial.println(assignedFacultyBeaconMac);
 
+  // Check if beacon MAC is configured
+  if (String(assignedFacultyBeaconMac) == "00:00:00:00:00:00") {
+    Serial.println("*** WARNING: Beacon MAC address not configured! ***");
+    Serial.println("*** Please update FACULTY_BEACON_MAC in config.h ***");
+    Serial.println("*** Detection will not work with default MAC address ***");
+    displaySystemStatus("Beacon MAC not configured!");
+  }
+
+  Serial.println("BLE Configuration:");
+  Serial.print("  Scan Interval: ");
+  Serial.print(BLE_SCAN_INTERVAL);
+  Serial.println(" ms");
+  Serial.print("  Scan Duration: ");
+  Serial.print(BLE_SCAN_DURATION);
+  Serial.println(" seconds");
+  Serial.print("  RSSI Threshold: ");
+  Serial.print(BLE_RSSI_THRESHOLD);
+  Serial.println(" dBm");
+  Serial.print("  Active Scan: ");
+  Serial.println(MAC_SCAN_ACTIVE ? "Yes" : "No");
+  Serial.print("  Detection Debounce: ");
+  Serial.println(MAC_DETECTION_DEBOUNCE);
+
   // Initialize BLE
   String deviceName = "ConsultEase-Faculty-" + String(FACULTY_ID);
   BLEDevice::init(deviceName.c_str());
+  Serial.print("BLE Device Name: ");
+  Serial.println(deviceName);
 
-  // Create BLE Scanner
+  // Create BLE Scanner with optimized parameters for nRF51822
   pBLEScan = BLEDevice::getScan();
   pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
   pBLEScan->setActiveScan(MAC_SCAN_ACTIVE);
-  pBLEScan->setInterval(100);
-  pBLEScan->setWindow(99);
 
-  Serial.println("BLE Scanner initialized for single beacon detection");
+  // Optimized scan parameters for nRF51822 beacon detection
+  // Interval: 80ms (recommended for beacon scanning)
+  // Window: 80ms (100% duty cycle for maximum detection)
+  pBLEScan->setInterval(80);
+  pBLEScan->setWindow(80);
+
+  Serial.println("BLE Scanner Parameters:");
+  Serial.println("  Scan Interval: 80ms (optimized for beacons)");
+  Serial.println("  Scan Window: 80ms (100% duty cycle)");
+  Serial.println("  Scan Type: " + String(MAC_SCAN_ACTIVE ? "Active" : "Passive"));
+
+  Serial.println("✅ BLE Scanner initialized successfully");
+  Serial.println("=== Ready for nRF51822 Beacon Detection ===");
   displaySystemStatus("BLE Scanner ready");
 }
 
 void performBLEScan() {
   if (pBLEScan == nullptr) {
-    Serial.println("BLE Scanner not initialized");
+    Serial.println("❌ BLE Scanner not initialized");
     return;
   }
 
@@ -294,32 +373,83 @@ void performBLEScan() {
 
   lastBleScanTime = currentTime;
 
-  Serial.print("Starting BLE scan for ");
+  Serial.println();
+  Serial.println("=== BLE SCAN START ===");
+  Serial.print("🔍 Scanning for ");
   Serial.print(FACULTY_NAME);
-  Serial.println("'s beacon...");
+  Serial.println("'s nRF51822 beacon...");
+  Serial.print("Target MAC: ");
+  Serial.println(assignedFacultyBeaconMac);
+  Serial.print("RSSI Threshold: ");
+  Serial.print(BLE_RSSI_THRESHOLD);
+  Serial.println(" dBm");
+
   displaySystemStatus("Scanning for beacon...");
 
   // Clear previous detection for this scan
   String previousDetectedMac = detectedFacultyMac;
   detectedFacultyMac = "";
 
-  // Perform scan
-  BLEScanResults* foundDevices = pBLEScan->start(BLE_SCAN_DURATION, false);
+  // Record scan start time
+  unsigned long scanStartTime = millis();
+
+  // Perform scan with enhanced error handling
+  BLEScanResults* foundDevices = nullptr;
+  try {
+    foundDevices = pBLEScan->start(BLE_SCAN_DURATION, false);
+  } catch (const std::exception& e) {
+    Serial.print("❌ BLE scan failed with exception: ");
+    Serial.println(e.what());
+    displaySystemStatus("BLE scan error");
+    return;
+  }
+
+  unsigned long scanDuration = millis() - scanStartTime;
+
+  // Scan results summary
+  Serial.println("--- SCAN RESULTS ---");
+  Serial.print("Scan Duration: ");
+  Serial.print(scanDuration);
+  Serial.println(" ms");
+
+  int totalDevicesFound = 0;
+  if (foundDevices) {
+    totalDevicesFound = foundDevices->getCount();
+  }
+
+  Serial.print("Total BLE devices found: ");
+  Serial.println(totalDevicesFound);
 
   // Check if we detected the assigned faculty member's beacon
   bool currentScanDetected = (detectedFacultyMac.length() > 0);
 
   if (currentScanDetected) {
-    Serial.print("Assigned faculty beacon detected: ");
-    Serial.print(detectedFacultyMac);
-    Serial.print(" (");
-    Serial.print(FACULTY_NAME);
-    Serial.println(")");
+    Serial.println("✅ TARGET BEACON DETECTED!");
+    Serial.print("   Faculty: ");
+    Serial.println(FACULTY_NAME);
+    Serial.print("   MAC: ");
+    Serial.println(detectedFacultyMac);
+    Serial.print("   Detection Count: ");
+    Serial.println(macDetectionCount);
+    displaySystemStatus(String(FACULTY_NAME) + " detected");
   } else {
-    Serial.print("Assigned faculty beacon not detected (");
-    Serial.print(assignedFacultyBeaconMac);
-    Serial.println(")");
+    Serial.println("❌ Target beacon NOT detected");
+    Serial.print("   Looking for: ");
+    Serial.println(assignedFacultyBeaconMac);
+    Serial.print("   Absence Count: ");
+    Serial.println(macAbsenceCount + 1);
     macAbsenceCount++;
+
+    // Provide troubleshooting hints
+    if (String(assignedFacultyBeaconMac) == "00:00:00:00:00:00") {
+      Serial.println("   ⚠️  ISSUE: Default MAC address - please configure actual beacon MAC");
+    } else if (totalDevicesFound == 0) {
+      Serial.println("   ⚠️  ISSUE: No BLE devices found - check beacon is powered and advertising");
+    } else {
+      Serial.println("   ⚠️  ISSUE: Beacon not in range or MAC address mismatch");
+    }
+
+    displaySystemStatus("Beacon not found");
   }
 
   // Clear scan results to free memory
@@ -328,13 +458,24 @@ void performBLEScan() {
   // Update faculty presence based on debouncing logic
   updateFacultyPresenceStatus();
 
-  Serial.print("Scan complete. Found ");
-  if (foundDevices) {
-    Serial.print(foundDevices->getCount());
+  // Display scan statistics
+  Serial.println("--- SCAN STATISTICS ---");
+  Serial.print("Current Faculty Status: ");
+  Serial.println(facultyPresent ? "PRESENT" : "ABSENT");
+  Serial.print("Detection Count: ");
+  Serial.println(macDetectionCount);
+  Serial.print("Absence Count: ");
+  Serial.println(macAbsenceCount);
+  Serial.print("Last Detection: ");
+  if (lastMacDetectionTime > 0) {
+    Serial.print((currentTime - lastMacDetectionTime) / 1000);
+    Serial.println(" seconds ago");
   } else {
-    Serial.print("0");
+    Serial.println("Never");
   }
-  Serial.println(" devices total");
+
+  Serial.println("=== BLE SCAN END ===");
+  Serial.println();
 }
 
 void updateFacultyPresenceStatus() {

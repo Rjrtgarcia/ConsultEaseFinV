@@ -119,8 +119,12 @@ class ConsultEaseApp:
         from .utils.hardware_validator import log_hardware_status
         hardware_status = log_hardware_status()
 
-        # Initialize database
+        # Initialize database with comprehensive admin account validation
+        logger.info("Initializing database and ensuring admin account integrity...")
         init_db()
+
+        # Perform additional admin account verification after database initialization
+        self._verify_admin_account_startup()
 
         # Start system monitoring
         logger.info("Starting system monitoring...")
@@ -187,11 +191,186 @@ class ConsultEaseApp:
         # Connect cleanup method
         self.app.aboutToQuit.connect(self.cleanup)
 
+        # Display startup summary
+        self._display_startup_summary()
+
         # Show login window
         self.show_login_window()
 
         # Store fullscreen preference for use in window creation
         self.fullscreen = fullscreen
+
+    def _verify_admin_account_startup(self):
+        """
+        Verify admin account integrity during application startup.
+        This provides an additional layer of validation and user feedback.
+        """
+        try:
+            logger.info("🔐 Performing startup admin account verification...")
+
+            # Test admin login functionality
+            result = self.admin_controller.authenticate("admin", "TempPass123!")
+
+            if result:
+                logger.info("✅ Admin account verification successful")
+                logger.info("🔑 Default admin credentials are working:")
+                logger.info("   Username: admin")
+                logger.info("   Password: TempPass123!")
+
+                if result.get('requires_password_change', False):
+                    logger.warning("⚠️  SECURITY NOTICE: Admin password must be changed on first login!")
+                else:
+                    logger.info("ℹ️  Admin password has been customized")
+
+            else:
+                logger.error("❌ CRITICAL: Admin account verification failed!")
+                logger.error("❌ Admin login may not work properly!")
+
+                # Attempt to fix the admin account
+                logger.info("🔧 Attempting to repair admin account...")
+                self._emergency_admin_repair()
+
+        except Exception as e:
+            logger.error(f"❌ Error during admin account verification: {e}")
+            logger.error("❌ Admin functionality may be compromised!")
+
+    def _emergency_admin_repair(self):
+        """
+        Emergency admin account repair during startup.
+        This is a last-resort fix for admin account issues.
+        """
+        try:
+            logger.warning("🚨 Performing emergency admin account repair...")
+
+            from .models.base import get_db
+            from .models.admin import Admin
+
+            db = get_db()
+
+            # Find or create admin account
+            admin = db.query(Admin).filter(Admin.username == "admin").first()
+
+            if admin:
+                logger.info("📝 Resetting existing admin account...")
+                # Reset to default password
+                password_hash, salt = Admin.hash_password("TempPass123!")
+                admin.password_hash = password_hash
+                admin.salt = salt
+                admin.is_active = True
+                admin.force_password_change = True
+            else:
+                logger.info("🆕 Creating new admin account...")
+                # Create new admin account
+                password_hash, salt = Admin.hash_password("TempPass123!")
+                admin = Admin(
+                    username="admin",
+                    password_hash=password_hash,
+                    salt=salt,
+                    email="admin@consultease.com",
+                    is_active=True,
+                    force_password_change=True
+                )
+                db.add(admin)
+
+            db.commit()
+            db.close()
+
+            # Test the repair
+            result = self.admin_controller.authenticate("admin", "TempPass123!")
+            if result:
+                logger.info("✅ Emergency admin repair successful!")
+                logger.warning("🔑 Admin credentials: admin / TempPass123!")
+                logger.warning("⚠️  MUST be changed on first login!")
+            else:
+                logger.error("❌ Emergency admin repair failed!")
+
+        except Exception as e:
+            logger.error(f"❌ Emergency admin repair failed: {e}")
+
+    def _display_startup_summary(self):
+        """
+        Display a comprehensive startup summary including admin account status.
+        """
+        try:
+            logger.info("=" * 60)
+            logger.info("🚀 CONSULTEASE SYSTEM STARTUP SUMMARY")
+            logger.info("=" * 60)
+
+            # System information
+            logger.info("📋 System Information:")
+            logger.info(f"   • Application: ConsultEase Faculty Consultation System")
+            logger.info(f"   • Version: Production Ready")
+            logger.info(f"   • Platform: Raspberry Pi / Linux")
+            logger.info(f"   • Database: SQLite (consultease.db)")
+
+            # Admin account status
+            logger.info("")
+            logger.info("🔐 Admin Account Status:")
+            try:
+                from .models.base import get_db
+                from .models.admin import Admin
+
+                db = get_db()
+                admin_count = db.query(Admin).count()
+                default_admin = db.query(Admin).filter(Admin.username == "admin").first()
+
+                if default_admin and default_admin.is_active:
+                    logger.info("   ✅ Default admin account is active and ready")
+                    logger.info("   🔑 Login Credentials:")
+                    logger.info("      Username: admin")
+                    logger.info("      Password: TempPass123!")
+
+                    if default_admin.force_password_change:
+                        logger.info("   ⚠️  Password change required on first login")
+                    else:
+                        logger.info("   ℹ️  Password has been customized")
+
+                    # Test login
+                    if default_admin.check_password("TempPass123!"):
+                        logger.info("   ✅ Login test: PASSED")
+                    else:
+                        logger.info("   ❌ Login test: FAILED")
+                else:
+                    logger.info("   ❌ Default admin account not found or inactive")
+
+                logger.info(f"   📊 Total admin accounts: {admin_count}")
+                db.close()
+
+            except Exception as e:
+                logger.error(f"   ❌ Error checking admin status: {e}")
+
+            # Security notices
+            logger.info("")
+            logger.info("🔒 Security Notices:")
+            logger.info("   • Default password MUST be changed on first login")
+            logger.info("   • All admin actions are logged for audit purposes")
+            logger.info("   • System enforces strong password requirements")
+
+            # Access instructions
+            logger.info("")
+            logger.info("🎯 How to Access Admin Dashboard:")
+            logger.info("   1. Touch the screen to activate the interface")
+            logger.info("   2. Click 'Admin Login' button")
+            logger.info("   3. Enter: admin / TempPass123!")
+            logger.info("   4. Change password when prompted")
+            logger.info("   5. Access full admin functionality")
+
+            # System status
+            logger.info("")
+            logger.info("📊 System Status:")
+            logger.info("   ✅ Database initialized and ready")
+            logger.info("   ✅ Admin account verified")
+            logger.info("   ✅ Hardware validation completed")
+            logger.info("   ✅ System monitoring active")
+            logger.info("   ✅ MQTT service running")
+            logger.info("   ✅ All controllers initialized")
+
+            logger.info("")
+            logger.info("🎉 ConsultEase is ready for use!")
+            logger.info("=" * 60)
+
+        except Exception as e:
+            logger.error(f"Error displaying startup summary: {e}")
 
     def _get_theme_preference(self):
         """

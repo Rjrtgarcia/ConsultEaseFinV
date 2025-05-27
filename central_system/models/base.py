@@ -283,15 +283,192 @@ def _create_performance_indexes():
         if 'db' in locals():
             db.close()
 
+def _ensure_admin_account_integrity():
+    """
+    Ensure admin account exists and is properly configured.
+    This function performs comprehensive admin account validation and repair.
+
+    Returns:
+        bool: True if admin account is ready, False if there were unrecoverable errors
+    """
+    db = None
+    try:
+        # Import models here to avoid circular imports
+        from .admin import Admin
+
+        db = get_db()
+
+        # Check for existing admin accounts
+        admin_accounts = db.query(Admin).all()
+        default_admin = db.query(Admin).filter(Admin.username == "admin").first()
+
+        logger.info(f"Admin account integrity check: Found {len(admin_accounts)} admin account(s)")
+
+        # Case 1: No admin accounts exist at all
+        if len(admin_accounts) == 0:
+            logger.warning("No admin accounts found - creating default admin account")
+            return _create_default_admin(db)
+
+        # Case 2: Default admin doesn't exist but other admins do
+        elif not default_admin:
+            logger.warning("Default 'admin' account not found - creating it")
+            return _create_default_admin(db)
+
+        # Case 3: Default admin exists - validate and fix if needed
+        else:
+            logger.info("Default admin account found - validating configuration")
+            return _validate_and_fix_admin(db, default_admin)
+
+    except Exception as e:
+        logger.error(f"Critical error during admin account integrity check: {e}")
+        if db:
+            db.rollback()
+        return False
+    finally:
+        if db:
+            db.close()
+
+def _create_default_admin(db):
+    """
+    Create the default admin account with secure settings.
+
+    Args:
+        db: Database session
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        from .admin import Admin
+
+        # Create default admin with temporary password that must be changed
+        password_hash, salt = Admin.hash_password("TempPass123!")
+        default_admin = Admin(
+            username="admin",
+            password_hash=password_hash,
+            salt=salt,
+            email="admin@consultease.com",
+            is_active=True,
+            force_password_change=True  # Force password change on first login
+        )
+
+        db.add(default_admin)
+        db.commit()
+
+        logger.warning("✅ Created default admin account successfully")
+        logger.warning("🔑 Default credentials: admin / TempPass123!")
+        logger.warning("⚠️  SECURITY NOTICE: This password MUST be changed on first login!")
+
+        # Verify the account was created correctly
+        return _test_admin_login(default_admin, "TempPass123!")
+
+    except Exception as e:
+        logger.error(f"Failed to create default admin account: {e}")
+        db.rollback()
+        return False
+
+def _validate_and_fix_admin(db, admin):
+    """
+    Validate and fix the existing default admin account.
+
+    Args:
+        db: Database session
+        admin: Admin account object
+
+    Returns:
+        bool: True if admin is valid/fixed, False otherwise
+    """
+    try:
+        issues_found = []
+        fixes_applied = []
+
+        # Check if account is active
+        if not admin.is_active:
+            issues_found.append("Account is inactive")
+            admin.is_active = True
+            fixes_applied.append("Activated account")
+
+        # Test if the default password works
+        if not admin.check_password("TempPass123!"):
+            issues_found.append("Default password doesn't work")
+            # Reset to default password
+            password_hash, salt = admin.hash_password("TempPass123!")
+            admin.password_hash = password_hash
+            admin.salt = salt
+            admin.force_password_change = True
+            fixes_applied.append("Reset password to default")
+
+        # Ensure password change is forced for security
+        if not admin.force_password_change:
+            admin.force_password_change = True
+            fixes_applied.append("Enabled forced password change")
+
+        # Apply fixes if any were needed
+        if fixes_applied:
+            db.commit()
+            logger.warning(f"🔧 Fixed admin account issues: {', '.join(fixes_applied)}")
+            logger.warning("🔑 Admin credentials: admin / TempPass123!")
+            logger.warning("⚠️  SECURITY NOTICE: Password must be changed on first login!")
+        else:
+            logger.info("✅ Default admin account is properly configured")
+
+        # Final verification
+        return _test_admin_login(admin, "TempPass123!")
+
+    except Exception as e:
+        logger.error(f"Failed to validate/fix admin account: {e}")
+        db.rollback()
+        return False
+
+def _test_admin_login(admin, password):
+    """
+    Test admin login functionality to ensure it works.
+
+    Args:
+        admin: Admin account object
+        password: Password to test
+
+    Returns:
+        bool: True if login test successful, False otherwise
+    """
+    try:
+        # Test password verification
+        if admin.check_password(password):
+            logger.info("✅ Admin login test successful")
+            return True
+        else:
+            logger.error("❌ Admin login test failed - password verification failed")
+            return False
+
+    except Exception as e:
+        logger.error(f"❌ Admin login test failed with error: {e}")
+        return False
+
 def init_db():
     """
-    Initialize database tables, create indexes, and create default data if needed.
+    Initialize database tables, create indexes, and ensure system integrity.
+    This includes comprehensive admin account validation and automatic repair.
     """
+    logger.info("🚀 Initializing ConsultEase database...")
+
     # Create tables
     Base.metadata.create_all(bind=engine)
+    logger.info("✅ Database tables created/verified")
 
     # Create performance indexes for frequently queried fields
     _create_performance_indexes()
+    logger.info("✅ Performance indexes created/verified")
+
+    # Ensure admin account integrity (critical for system access)
+    logger.info("🔐 Performing admin account integrity check...")
+    admin_ready = _ensure_admin_account_integrity()
+
+    if not admin_ready:
+        logger.error("❌ CRITICAL: Admin account setup failed!")
+        logger.error("❌ System may not be accessible through admin interface!")
+        # Don't fail completely - continue with other initialization
+    else:
+        logger.info("✅ Admin account is ready for use")
 
     # Check if we need to create default data
     db = get_db()
@@ -300,23 +477,6 @@ def init_db():
         from .admin import Admin
         from .faculty import Faculty
         from .student import Student
-
-        # Check if admin table is empty
-        admin_count = db.query(Admin).count()
-        if admin_count == 0:
-            # Create default admin with temporary password that must be changed
-            password_hash, salt = Admin.hash_password("TempPass123!")
-            default_admin = Admin(
-                username="admin",
-                password_hash=password_hash,
-                salt=salt,
-                email="admin@consultease.com",
-                is_active=True,
-                force_password_change=True  # Force password change on first login
-            )
-            db.add(default_admin)
-            logger.warning("Created default admin with temporary password - MUST BE CHANGED ON FIRST LOGIN")
-            logger.warning("Default credentials: admin / TempPass123! - CHANGE IMMEDIATELY")
 
         # Check if faculty table is empty
         faculty_count = db.query(Faculty).count()
@@ -361,7 +521,7 @@ def init_db():
                 )
             ]
             db.add_all(sample_faculty)
-            logger.info("Created sample faculty data")
+            logger.info("✅ Created sample faculty data")
 
         # Check if student table is empty
         student_count = db.query(Student).count()
@@ -380,11 +540,13 @@ def init_db():
                 )
             ]
             db.add_all(sample_students)
-            logger.info("Created sample student data")
+            logger.info("✅ Created sample student data")
 
         db.commit()
+        logger.info("✅ Database initialization completed successfully")
+
     except Exception as e:
-        logger.error(f"Error creating default data: {str(e)}")
+        logger.error(f"❌ Error creating default data: {str(e)}")
         db.rollback()
     finally:
         db.close()

@@ -9,9 +9,12 @@ A comprehensive system for enhanced student-faculty interaction, featuring RFID-
 - RFID-based authentication
 - Real-time faculty availability display
 - Consultation request management with improved UI
-- Secure admin interface
+- Secure admin interface with automatic login account management
 - Touch-optimized UI with on-screen keyboard support (squeekboard preferred)
 - Smooth UI transitions and animations
+- Integrated admin account creation and repair
+- Real-time system monitoring and health checks
+- Comprehensive audit logging for security compliance
 
 ### Faculty Desk Unit (ESP32)
 - 2.4" TFT Display for consultation requests
@@ -79,6 +82,44 @@ python scripts/enable_fullscreen.py
 ```bash
 python central_system/main.py
 ```
+
+## Admin Access
+
+ConsultEase includes integrated admin account management that automatically ensures a working admin account is always available.
+
+### Default Admin Credentials
+
+The system automatically creates and maintains a default admin account:
+
+```
+Username: admin
+Password: TempPass123!
+```
+
+**Important Security Notes:**
+- ⚠️ This is a **temporary password** that MUST be changed on first login
+- 🔒 The system enforces **strong password requirements** for new passwords
+- 📝 All admin actions are **logged for audit purposes**
+- 🔧 Admin account issues are **automatically repaired** during system startup
+
+### Accessing the Admin Dashboard
+
+1. **Start the application** - The system will automatically verify/create the admin account
+2. **Touch the screen** to activate the interface
+3. **Click "Admin Login"** button
+4. **Enter credentials**: `admin` / `TempPass123!`
+5. **Change password** when prompted (required for security)
+6. **Access full admin functionality**
+
+### Admin Account Features
+
+- ✅ **Automatic Creation**: Admin account is created automatically if it doesn't exist
+- ✅ **Self-Repair**: System fixes broken admin accounts during startup
+- ✅ **Security Enforcement**: Forced password changes and strong password requirements
+- ✅ **Comprehensive Logging**: All admin operations are logged for audit trails
+- ✅ **Zero Configuration**: No manual setup required - works out of the box
+
+The system startup logs will show the admin account status and provide login instructions.
 
 ### Faculty Desk Unit
 

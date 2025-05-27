@@ -75,6 +75,52 @@ The faculty desk unit now includes automatic internet time synchronization. Conf
 - Visual indicators for sync status (green dot = synced, orange dot = fallback)
 - Graceful fallback to ESP32 internal clock if NTP fails
 
+### nRF51822 BLE Beacon Detection Configuration
+
+The faculty desk unit uses **passive scanning** to detect nRF51822 BLE beacons for faculty presence detection. No pairing or connection is required.
+
+#### Step 1: Find Your Beacon's MAC Address
+
+**Option A: Use Beacon Discovery Utility (Recommended)**
+1. Upload `beacon_discovery.ino` to your ESP32
+2. Open Serial Monitor at 115200 baud
+3. Power on your nRF51822 beacon near the ESP32
+4. Look for devices marked with "🎯 LIKELY nRF51822 BEACON"
+5. Copy the MAC address shown
+
+**Option B: Use Discovery Mode in Main Firmware**
+1. Set `#define BEACON_DISCOVERY_MODE true` in `config.h`
+2. Upload main firmware and check serial output
+3. Find your beacon in the detected devices list
+4. Set `#define BEACON_DISCOVERY_MODE false` after finding MAC
+
+#### Step 2: Configure Beacon Detection
+
+Update `config.h` with your beacon's MAC address:
+
+```cpp
+// Replace with your actual nRF51822 beacon MAC address
+#define FACULTY_BEACON_MAC "AA:BB:CC:DD:EE:FF"
+
+// Adjust detection parameters if needed
+#define BLE_RSSI_THRESHOLD -75  // Signal strength threshold (-75 dBm ≈ 5-10 meters)
+#define BLE_SCAN_INTERVAL 5000  // Scan every 5 seconds
+#define BLE_SCAN_DURATION 3     // Scan for 3 seconds each time
+```
+
+#### Detection Features:
+- **No Pairing Required**: Uses passive BLE scanning
+- **Automatic Detection**: Scans every 5 seconds for assigned beacon
+- **Range Control**: Configurable RSSI threshold for detection range
+- **Comprehensive Debugging**: Detailed serial output for troubleshooting
+- **Reliable Detection**: Debouncing and timeout mechanisms for stable presence detection
+
+#### Troubleshooting:
+- See `BLE_BEACON_TROUBLESHOOTING.md` for detailed troubleshooting guide
+- Use `beacon_discovery.ino` to verify beacon is advertising
+- Check serial output for detection logs and error messages
+- Adjust RSSI threshold for different detection ranges
+
 ## Testing
 
 ### NTP Time Synchronization Testing

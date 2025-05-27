@@ -23,21 +23,33 @@
 #define FACULTY_NAME "Jeysibn"  // This should match the faculty name in the database
 #define FACULTY_DEPARTMENT "Computer Science"  // This should match the faculty department in the database
 
-// BLE Configuration - MAC Address Detection for nRF51822 Beacons
-#define BLE_SCAN_INTERVAL 3000  // Scan interval in milliseconds (optimized for nRF51822)
-#define BLE_SCAN_DURATION 5     // Scan duration in seconds (longer for better beacon detection)
-#define BLE_RSSI_THRESHOLD -85  // RSSI threshold for presence detection (adjusted for beacon range)
+// BLE Configuration - Optimized for nRF51822 Beacon Detection
+#define BLE_SCAN_INTERVAL 5000  // Scan interval in milliseconds (5 seconds for reliable detection)
+#define BLE_SCAN_DURATION 3     // Scan duration in seconds (3 seconds for thorough scanning)
+#define BLE_RSSI_THRESHOLD -75  // RSSI threshold for presence detection (-75 dBm for ~5-10 meter range)
 
 // Faculty BLE Beacon Configuration - nRF51822 Beacon
 // Each ESP32 unit is configured with only its assigned faculty member's beacon MAC address
-// Format: "XX:XX:XX:XX:XX:XX" (case insensitive)
-// IMPORTANT: Update this with the actual nRF51822 beacon MAC address for this specific faculty member
-#define FACULTY_BEACON_MAC "00:00:00:00:00:00"  // REPLACE WITH ACTUAL BEACON MAC ADDRESS
+// Format: "XX:XX:XX:XX:XX:XX" (case insensitive, colons optional)
+//
+// SETUP INSTRUCTIONS:
+// 1. Power on your nRF51822 beacon
+// 2. Upload this firmware with default MAC (00:00:00:00:00:00)
+// 3. Check serial output - it will show all detected BLE devices
+// 4. Find your beacon's MAC address in the device list
+// 5. Update FACULTY_BEACON_MAC below with the actual MAC address
+// 6. Re-upload the firmware
+//
+// IMPORTANT: Replace with actual nRF51822 beacon MAC address
+#define FACULTY_BEACON_MAC "00:00:00:00:00:00"  // ⚠️ MUST BE UPDATED WITH REAL BEACON MAC
+
+// Beacon Discovery Mode - Set to true to see all BLE devices (for finding beacon MAC)
+#define BEACON_DISCOVERY_MODE false  // Set to true to discover beacon MAC addresses
 
 // MAC Address Detection Settings - Optimized for nRF51822 Beacons
-#define MAC_DETECTION_TIMEOUT 45000    // Time in ms to consider faculty absent (increased for beacon reliability)
-#define MAC_SCAN_ACTIVE true           // Use active scanning (better for beacon detection)
-#define MAC_DETECTION_DEBOUNCE 2       // Number of consecutive scans needed (reduced for faster response)
+#define MAC_DETECTION_TIMEOUT 30000   // Time in ms to consider faculty absent (30 seconds)
+#define MAC_SCAN_ACTIVE true          // Use active scanning (recommended for beacons)
+#define MAC_DETECTION_DEBOUNCE 2      // Number of consecutive scans needed for state change
 
 // Display Configuration
 #define TFT_ROTATION 1  // 0=Portrait, 1=Landscape, 2=Inverted Portrait, 3=Inverted Landscape
