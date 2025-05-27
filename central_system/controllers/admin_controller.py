@@ -123,14 +123,13 @@ class AdminController:
         """
         return not self.check_admin_accounts_exist()
 
-    def create_admin_account(self, username, password, email=None, force_password_change=False):
+    def create_admin_account(self, username, password, force_password_change=False):
         """
         Create a new admin account with enhanced validation and error handling.
 
         Args:
             username (str): Admin username
             password (str): Admin password
-            email (str, optional): Admin email
             force_password_change (bool): Whether to force password change on first login
 
         Returns:
@@ -163,7 +162,6 @@ class AdminController:
                 username=username,
                 password_hash=password_hash,
                 salt=salt,
-                email=email,
                 is_active=True,
                 force_password_change=force_password_change
             )
@@ -190,7 +188,6 @@ class AdminController:
                     'admin': {
                         'id': new_admin.id,
                         'username': new_admin.username,
-                        'email': new_admin.email,
                         'is_active': new_admin.is_active
                     }
                 }

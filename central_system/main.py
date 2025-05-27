@@ -266,7 +266,6 @@ class ConsultEaseApp:
                     username="admin",
                     password_hash=password_hash,
                     salt=salt,
-                    email="admin@consultease.com",
                     is_active=True,
                     force_password_change=True
                 )

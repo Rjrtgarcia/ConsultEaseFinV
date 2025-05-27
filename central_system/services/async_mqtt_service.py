@@ -353,13 +353,11 @@ class AsyncMQTTService:
                     # Reset reconnect attempts on successful connection
                     reconnect_attempts = 0
 
-                    # Send ping if needed
+                    # Update last ping time (ping functionality removed as paho-mqtt doesn't have ping method)
                     if current_time - self.last_ping > self.ping_interval:
-                        try:
-                            self.client.ping()
-                            self.last_ping = current_time
-                        except Exception as e:
-                            logger.error(f"Error sending MQTT ping: {e}")
+                        # Just update the timestamp - the MQTT client handles keepalive automatically
+                        self.last_ping = current_time
+                        logger.debug("MQTT keepalive check - connection is active")
 
                 time.sleep(5)  # Check every 5 seconds
 

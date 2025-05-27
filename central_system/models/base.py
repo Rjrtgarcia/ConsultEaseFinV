@@ -347,7 +347,6 @@ def _create_default_admin(db):
             username="admin",
             password_hash=password_hash,
             salt=salt,
-            email="admin@consultease.com",
             is_active=True,
             force_password_change=True  # Force password change on first login
         )
