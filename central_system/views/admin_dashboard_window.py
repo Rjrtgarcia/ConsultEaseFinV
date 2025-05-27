@@ -95,10 +95,15 @@ class AdminDashboardWindow(BaseWindow):
 
         self.system_tab = SystemMaintenanceTab()
 
+        # Import and create system monitoring tab
+        from .system_monitoring_widget import SystemMonitoringWidget
+        self.monitoring_tab = SystemMonitoringWidget()
+
         # Add tabs to tab widget
         self.tab_widget.addTab(self.faculty_tab, "Faculty Management")
         self.tab_widget.addTab(self.student_tab, "Student Management")
         self.tab_widget.addTab(self.system_tab, "System Maintenance")
+        self.tab_widget.addTab(self.monitoring_tab, "System Monitoring")
 
         main_layout.addWidget(self.tab_widget)
 
@@ -222,6 +227,12 @@ class FacultyManagementTab(QWidget):
         self.delete_button.setStyleSheet("background-color: #F44336; color: white;")
         self.delete_button.clicked.connect(self.delete_faculty)
         button_layout.addWidget(self.delete_button)
+
+        # Add beacon management button
+        self.beacon_button = QPushButton("Beacon Management")
+        self.beacon_button.setStyleSheet("background-color: #2196F3; color: white;")
+        self.beacon_button.clicked.connect(self.open_beacon_management)
+        button_layout.addWidget(self.beacon_button)
 
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.refresh_data)
@@ -546,6 +557,958 @@ class FacultyManagementTab(QWidget):
             except Exception as e:
                 logger.error(f"Error deleting faculty: {str(e)}")
                 QMessageBox.warning(self, "Delete Faculty", f"Error deleting faculty: {str(e)}")
+
+    def open_beacon_management(self):
+        """
+        Open the beacon management dialog.
+        """
+        try:
+            dialog = BeaconManagementDialog(parent=self)
+            dialog.exec_()
+            # Refresh data after beacon management in case BLE IDs were updated
+            self.refresh_data()
+            self.faculty_updated.emit()
+        except Exception as e:
+            logger.error(f"Error opening beacon management: {str(e)}")
+            QMessageBox.critical(self, "Beacon Management Error", f"Error opening beacon management: {str(e)}")
+
+class BeaconManagementDialog(QDialog):
+    """
+    Dialog for managing nRF51822 beacon configuration and faculty assignments.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.faculty_controller = FacultyController()
+        self.beacon_config = {}
+        self.setWindowTitle("nRF51822 Beacon Management")
+        self.setModal(True)
+        self.resize(800, 600)
+        self.init_ui()
+        self.load_faculty_data()
+
+    def init_ui(self):
+        """Initialize the UI components."""
+        layout = QVBoxLayout(self)
+
+        # Title and description
+        title_label = QLabel("nRF51822 Beacon Management")
+        title_label.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(title_label)
+
+        description_label = QLabel(
+            "Configure nRF51822 BLE beacons for faculty presence detection. "
+            "Each beacon should be assigned to a specific faculty member."
+        )
+        description_label.setWordWrap(True)
+        description_label.setStyleSheet("margin-bottom: 15px; color: #666;")
+        layout.addWidget(description_label)
+
+        # Create tab widget for different beacon management functions
+        self.tab_widget = QTabWidget()
+
+        # Beacon Discovery Tab
+        self.discovery_tab = BeaconDiscoveryTab(self)
+        self.tab_widget.addTab(self.discovery_tab, "Beacon Discovery")
+
+        # Faculty Assignment Tab
+        self.assignment_tab = BeaconAssignmentTab(self)
+        self.tab_widget.addTab(self.assignment_tab, "Faculty Assignment")
+
+        # ESP32 Configuration Tab
+        self.config_tab = ESP32ConfigurationTab(self)
+        self.tab_widget.addTab(self.config_tab, "ESP32 Configuration")
+
+        # Testing Tab
+        self.testing_tab = BeaconTestingTab(self)
+        self.tab_widget.addTab(self.testing_tab, "Testing & Monitoring")
+
+        layout.addWidget(self.tab_widget)
+
+        # Close button
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        button_layout.addWidget(close_button)
+
+        layout.addLayout(button_layout)
+
+    def load_faculty_data(self):
+        """Load faculty data for beacon assignment."""
+        try:
+            faculty_list = self.faculty_controller.get_all_faculty()
+            # Pass faculty data to tabs that need it
+            self.assignment_tab.set_faculty_data(faculty_list)
+            self.config_tab.set_faculty_data(faculty_list)
+        except Exception as e:
+            logger.error(f"Error loading faculty data: {str(e)}")
+            QMessageBox.warning(self, "Data Error", f"Failed to load faculty data: {str(e)}")
+
+class BeaconDiscoveryTab(QWidget):
+    """Tab for discovering nRF51822 beacon MAC addresses."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.discovered_beacons = {}
+        self.init_ui()
+
+    def init_ui(self):
+        """Initialize the UI components."""
+        layout = QVBoxLayout(self)
+
+        # Instructions
+        instructions = QLabel(
+            "Follow these steps to discover your nRF51822 beacon MAC addresses:\n\n"
+            "1. Power on ONE beacon at a time\n"
+            "2. Use a BLE scanner app (nRF Connect, BLE Scanner, LightBlue)\n"
+            "3. Find your beacon in the scanner (may appear as 'nRF51822' or custom name)\n"
+            "4. Record the MAC address below\n"
+            "5. Repeat for all 5 beacons"
+        )
+        instructions.setWordWrap(True)
+        instructions.setStyleSheet("background-color: #f0f8ff; padding: 10px; border: 1px solid #ccc; border-radius: 5px;")
+        layout.addWidget(instructions)
+
+        # Beacon entry section
+        beacon_group = QGroupBox("Discovered Beacons")
+        beacon_layout = QVBoxLayout()
+
+        # Create 5 beacon entry rows
+        self.beacon_entries = []
+        for i in range(5):
+            beacon_row = QHBoxLayout()
+
+            label = QLabel(f"Beacon #{i+1}:")
+            label.setMinimumWidth(80)
+            beacon_row.addWidget(label)
+
+            mac_input = QLineEdit()
+            mac_input.setPlaceholderText("XX:XX:XX:XX:XX:XX")
+            mac_input.textChanged.connect(lambda text, idx=i: self.validate_mac_input(text, idx))
+            beacon_row.addWidget(mac_input)
+
+            status_label = QLabel("Not configured")
+            status_label.setStyleSheet("color: #666;")
+            status_label.setMinimumWidth(100)
+            beacon_row.addWidget(status_label)
+
+            self.beacon_entries.append({
+                'mac_input': mac_input,
+                'status_label': status_label
+            })
+
+            beacon_layout.addLayout(beacon_row)
+
+        beacon_group.setLayout(beacon_layout)
+        layout.addWidget(beacon_group)
+
+        # Action buttons
+        button_layout = QHBoxLayout()
+
+        validate_button = QPushButton("Validate All MAC Addresses")
+        validate_button.clicked.connect(self.validate_all_macs)
+        button_layout.addWidget(validate_button)
+
+        save_button = QPushButton("Save Configuration")
+        save_button.clicked.connect(self.save_beacon_config)
+        button_layout.addWidget(save_button)
+
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+
+        # Status area
+        self.status_text = QTextEdit()
+        self.status_text.setMaximumHeight(100)
+        self.status_text.setReadOnly(True)
+        self.status_text.setPlaceholderText("Status messages will appear here...")
+        layout.addWidget(self.status_text)
+
+    def validate_mac_input(self, text, index):
+        """Validate MAC address input in real-time."""
+        import re
+        mac_pattern = r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$'
+
+        entry = self.beacon_entries[index]
+        if text and re.match(mac_pattern, text):
+            entry['status_label'].setText("Valid")
+            entry['status_label'].setStyleSheet("color: green;")
+            entry['mac_input'].setStyleSheet("border: 2px solid green;")
+        elif text:
+            entry['status_label'].setText("Invalid format")
+            entry['status_label'].setStyleSheet("color: red;")
+            entry['mac_input'].setStyleSheet("border: 2px solid red;")
+        else:
+            entry['status_label'].setText("Not configured")
+            entry['status_label'].setStyleSheet("color: #666;")
+            entry['mac_input'].setStyleSheet("")
+
+    def validate_all_macs(self):
+        """Validate all MAC addresses and check for duplicates."""
+        mac_addresses = []
+        valid_count = 0
+
+        for i, entry in enumerate(self.beacon_entries):
+            mac = entry['mac_input'].text().strip().upper()
+            if mac:
+                if self.is_valid_mac(mac):
+                    if mac in mac_addresses:
+                        entry['status_label'].setText("Duplicate!")
+                        entry['status_label'].setStyleSheet("color: red;")
+                        entry['mac_input'].setStyleSheet("border: 2px solid red;")
+                    else:
+                        mac_addresses.append(mac)
+                        valid_count += 1
+                        entry['status_label'].setText("Valid")
+                        entry['status_label'].setStyleSheet("color: green;")
+                        entry['mac_input'].setStyleSheet("border: 2px solid green;")
+                else:
+                    entry['status_label'].setText("Invalid format")
+                    entry['status_label'].setStyleSheet("color: red;")
+                    entry['mac_input'].setStyleSheet("border: 2px solid red;")
+
+        self.log_status(f"Validation complete: {valid_count} valid MAC addresses found")
+        if valid_count == 5:
+            self.log_status("✓ All 5 beacons configured with valid MAC addresses!")
+        elif valid_count > 0:
+            self.log_status(f"⚠ {5 - valid_count} beacons still need configuration")
+
+    def is_valid_mac(self, mac):
+        """Check if MAC address format is valid."""
+        import re
+        pattern = r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$'
+        return bool(re.match(pattern, mac))
+
+    def save_beacon_config(self):
+        """Save the beacon configuration."""
+        try:
+            config = {}
+            valid_beacons = 0
+
+            for i, entry in enumerate(self.beacon_entries):
+                mac = entry['mac_input'].text().strip().upper()
+                if mac and self.is_valid_mac(mac):
+                    config[f'beacon_{i+1}'] = {
+                        'mac_address': mac,
+                        'beacon_number': i + 1
+                    }
+                    valid_beacons += 1
+
+            if valid_beacons == 0:
+                QMessageBox.warning(self, "Save Error", "No valid beacon MAC addresses to save.")
+                return
+
+            # Save to parent dialog
+            if hasattr(self.parent(), 'beacon_config'):
+                self.parent().beacon_config = config
+                self.log_status(f"✓ Saved configuration for {valid_beacons} beacons")
+                QMessageBox.information(self, "Configuration Saved",
+                                      f"Successfully saved configuration for {valid_beacons} beacons.")
+
+        except Exception as e:
+            logger.error(f"Error saving beacon configuration: {str(e)}")
+            QMessageBox.critical(self, "Save Error", f"Error saving configuration: {str(e)}")
+
+    def log_status(self, message):
+        """Add a status message to the status text area."""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.status_text.append(f"[{timestamp}] {message}")
+
+class BeaconAssignmentTab(QWidget):
+    """Tab for assigning beacons to faculty members."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.faculty_data = []
+        self.init_ui()
+
+    def init_ui(self):
+        """Initialize the UI components."""
+        layout = QVBoxLayout(self)
+
+        # Instructions
+        instructions = QLabel(
+            "Assign discovered beacons to faculty members. Each beacon should be assigned to exactly one faculty member."
+        )
+        instructions.setWordWrap(True)
+        instructions.setStyleSheet("background-color: #f0f8ff; padding: 10px; border: 1px solid #ccc; border-radius: 5px;")
+        layout.addWidget(instructions)
+
+        # Assignment table
+        self.assignment_table = QTableWidget()
+        self.assignment_table.setColumnCount(4)
+        self.assignment_table.setHorizontalHeaderLabels(["Beacon #", "MAC Address", "Faculty Member", "Action"])
+        self.assignment_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(self.assignment_table)
+
+        # Action buttons
+        button_layout = QHBoxLayout()
+
+        refresh_button = QPushButton("Refresh Beacon Data")
+        refresh_button.clicked.connect(self.refresh_beacon_data)
+        button_layout.addWidget(refresh_button)
+
+        assign_button = QPushButton("Auto-Assign to Faculty")
+        assign_button.clicked.connect(self.auto_assign_faculty)
+        button_layout.addWidget(assign_button)
+
+        save_button = QPushButton("Save Assignments")
+        save_button.clicked.connect(self.save_assignments)
+        button_layout.addWidget(save_button)
+
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+
+    def set_faculty_data(self, faculty_list):
+        """Set the faculty data for assignment."""
+        self.faculty_data = faculty_list
+        self.refresh_assignment_table()
+
+    def refresh_beacon_data(self):
+        """Refresh beacon data from discovery tab."""
+        if hasattr(self.parent(), 'beacon_config'):
+            self.refresh_assignment_table()
+        else:
+            QMessageBox.information(self, "No Beacon Data",
+                                  "Please discover beacon MAC addresses first in the Beacon Discovery tab.")
+
+    def refresh_assignment_table(self):
+        """Refresh the assignment table with current data."""
+        self.assignment_table.setRowCount(0)
+
+        if not hasattr(self.parent(), 'beacon_config'):
+            return
+
+        beacon_config = self.parent().beacon_config
+
+        for beacon_key, beacon_info in beacon_config.items():
+            row = self.assignment_table.rowCount()
+            self.assignment_table.insertRow(row)
+
+            # Beacon number
+            self.assignment_table.setItem(row, 0, QTableWidgetItem(str(beacon_info['beacon_number'])))
+
+            # MAC address
+            self.assignment_table.setItem(row, 1, QTableWidgetItem(beacon_info['mac_address']))
+
+            # Faculty dropdown
+            faculty_combo = QComboBox()
+            faculty_combo.addItem("-- Select Faculty --", None)
+            for faculty in self.faculty_data:
+                faculty_combo.addItem(f"{faculty.name} (ID: {faculty.id})", faculty.id)
+
+            self.assignment_table.setCellWidget(row, 2, faculty_combo)
+
+            # Action button
+            assign_button = QPushButton("Assign")
+            assign_button.clicked.connect(lambda checked, r=row: self.assign_beacon_to_faculty(r))
+            self.assignment_table.setCellWidget(row, 3, assign_button)
+
+    def auto_assign_faculty(self):
+        """Automatically assign beacons to faculty in order."""
+        if not self.faculty_data:
+            QMessageBox.warning(self, "No Faculty Data", "No faculty members available for assignment.")
+            return
+
+        for row in range(self.assignment_table.rowCount()):
+            if row < len(self.faculty_data):
+                faculty_combo = self.assignment_table.cellWidget(row, 2)
+                if faculty_combo:
+                    # Set to faculty member (index 1 because index 0 is "-- Select Faculty --")
+                    faculty_combo.setCurrentIndex(row + 1)
+
+        QMessageBox.information(self, "Auto-Assignment",
+                              f"Automatically assigned {min(self.assignment_table.rowCount(), len(self.faculty_data))} beacons to faculty members.")
+
+    def assign_beacon_to_faculty(self, row):
+        """Assign a specific beacon to the selected faculty member."""
+        faculty_combo = self.assignment_table.cellWidget(row, 2)
+        if not faculty_combo or faculty_combo.currentData() is None:
+            QMessageBox.warning(self, "Assignment Error", "Please select a faculty member first.")
+            return
+
+        faculty_id = faculty_combo.currentData()
+        mac_address = self.assignment_table.item(row, 1).text()
+
+        # Update faculty BLE ID in database
+        try:
+            from ..controllers.faculty_controller import FacultyController
+            faculty_controller = FacultyController()
+
+            # Get faculty object
+            faculty = faculty_controller.get_faculty_by_id(faculty_id)
+            if faculty:
+                # Update BLE ID
+                success = faculty_controller.update_faculty_ble_id(faculty_id, mac_address)
+                if success:
+                    QMessageBox.information(self, "Assignment Success",
+                                          f"Successfully assigned beacon {mac_address} to {faculty.name}")
+                else:
+                    QMessageBox.warning(self, "Assignment Error", "Failed to update faculty BLE ID in database.")
+            else:
+                QMessageBox.warning(self, "Assignment Error", f"Faculty with ID {faculty_id} not found.")
+
+        except Exception as e:
+            logger.error(f"Error assigning beacon to faculty: {str(e)}")
+            QMessageBox.critical(self, "Assignment Error", f"Error assigning beacon: {str(e)}")
+
+    def save_assignments(self):
+        """Save all beacon assignments to the database."""
+        try:
+            assignments_made = 0
+            errors = []
+
+            from ..controllers.faculty_controller import FacultyController
+            faculty_controller = FacultyController()
+
+            for row in range(self.assignment_table.rowCount()):
+                faculty_combo = self.assignment_table.cellWidget(row, 2)
+                if faculty_combo and faculty_combo.currentData() is not None:
+                    faculty_id = faculty_combo.currentData()
+                    mac_address = self.assignment_table.item(row, 1).text()
+
+                    try:
+                        success = faculty_controller.update_faculty_ble_id(faculty_id, mac_address)
+                        if success:
+                            assignments_made += 1
+                        else:
+                            errors.append(f"Failed to assign beacon {mac_address}")
+                    except Exception as e:
+                        errors.append(f"Error assigning beacon {mac_address}: {str(e)}")
+
+            if assignments_made > 0:
+                QMessageBox.information(self, "Assignments Saved",
+                                      f"Successfully saved {assignments_made} beacon assignments.")
+
+            if errors:
+                error_msg = "\n".join(errors)
+                QMessageBox.warning(self, "Assignment Errors", f"Some assignments failed:\n{error_msg}")
+
+        except Exception as e:
+            logger.error(f"Error saving beacon assignments: {str(e)}")
+            QMessageBox.critical(self, "Save Error", f"Error saving assignments: {str(e)}")
+
+class ESP32ConfigurationTab(QWidget):
+    """Tab for generating ESP32 configuration files."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.faculty_data = []
+        self.init_ui()
+
+    def init_ui(self):
+        """Initialize the UI components."""
+        layout = QVBoxLayout(self)
+
+        # Instructions
+        instructions = QLabel(
+            "Generate ESP32 configuration files for each faculty desk unit. "
+            "Each unit will be configured with the appropriate faculty ID and all beacon MAC addresses."
+        )
+        instructions.setWordWrap(True)
+        instructions.setStyleSheet("background-color: #f0f8ff; padding: 10px; border: 1px solid #ccc; border-radius: 5px;")
+        layout.addWidget(instructions)
+
+        # Configuration preview
+        config_group = QGroupBox("Configuration Preview")
+        config_layout = QVBoxLayout()
+
+        self.config_text = QTextEdit()
+        self.config_text.setReadOnly(True)
+        self.config_text.setMaximumHeight(300)
+        self.config_text.setPlaceholderText("Configuration preview will appear here...")
+        config_layout.addWidget(self.config_text)
+
+        config_group.setLayout(config_layout)
+        layout.addWidget(config_group)
+
+        # Action buttons
+        button_layout = QHBoxLayout()
+
+        generate_button = QPushButton("Generate All Configurations")
+        generate_button.clicked.connect(self.generate_all_configs)
+        button_layout.addWidget(generate_button)
+
+        preview_button = QPushButton("Preview Configuration")
+        preview_button.clicked.connect(self.preview_configuration)
+        button_layout.addWidget(preview_button)
+
+        export_button = QPushButton("Export to Files")
+        export_button.clicked.connect(self.export_configurations)
+        button_layout.addWidget(export_button)
+
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+
+        # Status area
+        self.status_text = QTextEdit()
+        self.status_text.setMaximumHeight(100)
+        self.status_text.setReadOnly(True)
+        self.status_text.setPlaceholderText("Status messages will appear here...")
+        layout.addWidget(self.status_text)
+
+    def set_faculty_data(self, faculty_list):
+        """Set the faculty data for configuration generation."""
+        self.faculty_data = faculty_list
+
+    def generate_all_configs(self):
+        """Generate configurations for all faculty desk units."""
+        if not self.faculty_data:
+            QMessageBox.warning(self, "No Faculty Data", "No faculty members available for configuration generation.")
+            return
+
+        if not hasattr(self.parent(), 'beacon_config') or not self.parent().beacon_config:
+            QMessageBox.warning(self, "No Beacon Data", "Please configure beacon MAC addresses first.")
+            return
+
+        try:
+            beacon_config = self.parent().beacon_config
+            configurations = {}
+
+            for i, faculty in enumerate(self.faculty_data[:5]):  # Limit to 5 units
+                config = self.generate_faculty_config(faculty, beacon_config, i + 1)
+                configurations[f"unit_{i+1}_{faculty.name.replace(' ', '_')}"] = config
+
+            self.log_status(f"Generated configurations for {len(configurations)} faculty desk units")
+
+            # Store configurations in parent for export
+            if hasattr(self.parent(), 'esp32_configurations'):
+                self.parent().esp32_configurations = configurations
+            else:
+                setattr(self.parent(), 'esp32_configurations', configurations)
+
+            QMessageBox.information(self, "Configuration Generated",
+                                  f"Successfully generated configurations for {len(configurations)} ESP32 units.")
+
+        except Exception as e:
+            logger.error(f"Error generating configurations: {str(e)}")
+            QMessageBox.critical(self, "Generation Error", f"Error generating configurations: {str(e)}")
+
+    def generate_faculty_config(self, faculty, beacon_config, unit_number):
+        """Generate configuration for a specific faculty member."""
+        from datetime import datetime
+
+        # Create MAC addresses array
+        mac_addresses = []
+        for beacon_info in beacon_config.values():
+            mac_addresses.append(beacon_info['mac_address'])
+
+        # Pad with empty strings if less than 5 beacons
+        while len(mac_addresses) < 5:
+            mac_addresses.append("")
+
+        config_content = f'''/**
+ * ConsultEase - Faculty Desk Unit Configuration
+ * Generated for: {faculty.name} (Unit #{unit_number})
+ * Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+ *
+ * This file contains configuration settings for Faculty Desk Unit #{unit_number}.
+ * This unit is assigned to {faculty.name} in {faculty.department}.
+ */
+
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// WiFi Configuration
+#define WIFI_SSID "ConsultEase"
+#define WIFI_PASSWORD "Admin123"
+
+// MQTT Configuration
+#define MQTT_SERVER "172.20.10.8"  // Update with your MQTT broker IP
+#define MQTT_PORT 1883
+#define MQTT_USERNAME ""  // Leave empty if not using authentication
+#define MQTT_PASSWORD ""  // Leave empty if not using authentication
+
+// Faculty Configuration - Unit #{unit_number}
+#define FACULTY_ID {faculty.id}  // This should match the faculty ID in the database
+#define FACULTY_NAME "{faculty.name}"  // This should match the faculty name in the database
+#define FACULTY_DEPARTMENT "{faculty.department}"  // This should match the faculty department in the database
+
+// BLE Configuration - MAC Address Detection for nRF51822 Beacons
+#define BLE_SCAN_INTERVAL 3000  // Scan interval in milliseconds (optimized for nRF51822)
+#define BLE_SCAN_DURATION 5     // Scan duration in seconds (longer for better beacon detection)
+#define BLE_RSSI_THRESHOLD -85  // RSSI threshold for presence detection (adjusted for beacon range)
+
+// Faculty MAC Addresses - nRF51822 BLE Beacon MAC addresses
+// Format: "XX:XX:XX:XX:XX:XX" (case insensitive)
+// All units scan for all beacons, but only report status for their assigned faculty
+#define MAX_FACULTY_MAC_ADDRESSES 5
+extern const char* FACULTY_MAC_ADDRESSES[MAX_FACULTY_MAC_ADDRESSES];
+
+// MAC Address Detection Settings - Optimized for nRF51822 Beacons
+#define MAC_DETECTION_TIMEOUT 45000    // Time in ms to consider faculty absent (increased for beacon reliability)
+#define MAC_SCAN_ACTIVE true           // Use active scanning (better for beacon detection)
+#define MAC_DETECTION_DEBOUNCE 2       // Number of consecutive scans needed (reduced for faster response)
+
+// Display Configuration
+#define TFT_ROTATION 1  // 0=Portrait, 1=Landscape, 2=Inverted Portrait, 3=Inverted Landscape
+
+// Color Scheme - National University Philippines
+#define NU_BLUE      0x0015      // Dark blue (navy) - Primary color
+#define NU_GOLD      0xFE60      // Gold/Yellow - Secondary color
+#define NU_DARKBLUE  0x000B      // Darker blue for contrasts
+#define NU_LIGHTGOLD 0xF710      // Lighter gold for highlights
+#define TFT_WHITE    0xFFFF      // White for text
+#define TFT_BLACK    0x0000      // Black for backgrounds
+
+// UI Colors
+#define TFT_BG       NU_BLUE         // Background color
+#define TFT_TEXT     TFT_WHITE       // Text color
+#define TFT_HEADER   NU_DARKBLUE     // Header color
+#define TFT_ACCENT   NU_GOLD         // Accent color
+#define TFT_HIGHLIGHT NU_LIGHTGOLD   // Highlight color
+
+// MQTT Topics - Standardized format
+#define MQTT_TOPIC_STATUS "consultease/faculty/%d/status"  // %d will be replaced with FACULTY_ID
+#define MQTT_TOPIC_MAC_STATUS "consultease/faculty/%d/mac_status"  // %d will be replaced with FACULTY_ID
+#define MQTT_TOPIC_REQUESTS "consultease/faculty/%d/requests"  // %d will be replaced with FACULTY_ID
+#define MQTT_TOPIC_MESSAGES "consultease/faculty/%d/messages"  // %d will be replaced with FACULTY_ID
+#define MQTT_TOPIC_NOTIFICATIONS "consultease/system/notifications"
+
+// Legacy MQTT Topics - For backward compatibility
+#define MQTT_LEGACY_STATUS "professor/status"
+#define MQTT_LEGACY_MESSAGES "professor/messages"
+
+// Debug Configuration
+#define DEBUG_ENABLED true  // Set to false to disable debug output
+
+#endif // CONFIG_H
+
+// MAC Addresses Array (add this to faculty_desk_unit.ino):
+// Faculty MAC Addresses Definition - nRF51822 BLE Beacons
+const char* FACULTY_MAC_ADDRESSES[MAX_FACULTY_MAC_ADDRESSES] = {{
+'''
+
+        for i, mac in enumerate(mac_addresses):
+            if mac:
+                config_content += f'  "{mac}"'
+            else:
+                config_content += f'  ""'
+
+            if i < len(mac_addresses) - 1:
+                config_content += ','
+
+            if mac:
+                # Find which beacon this is
+                beacon_num = i + 1
+                config_content += f'  // Beacon #{beacon_num}'
+            else:
+                config_content += f'  // Empty slot'
+
+            config_content += '\n'
+
+        config_content += '};\n'
+
+        return config_content
+
+    def preview_configuration(self):
+        """Preview the configuration for the first faculty member."""
+        if not self.faculty_data:
+            QMessageBox.warning(self, "No Faculty Data", "No faculty members available for preview.")
+            return
+
+        if not hasattr(self.parent(), 'beacon_config') or not self.parent().beacon_config:
+            QMessageBox.warning(self, "No Beacon Data", "Please configure beacon MAC addresses first.")
+            return
+
+        try:
+            faculty = self.faculty_data[0]
+            beacon_config = self.parent().beacon_config
+            config = self.generate_faculty_config(faculty, beacon_config, 1)
+
+            self.config_text.setPlainText(config)
+            self.log_status(f"Previewing configuration for {faculty.name}")
+
+        except Exception as e:
+            logger.error(f"Error previewing configuration: {str(e)}")
+            QMessageBox.critical(self, "Preview Error", f"Error previewing configuration: {str(e)}")
+
+    def export_configurations(self):
+        """Export all configurations to files."""
+        if not hasattr(self.parent(), 'esp32_configurations'):
+            QMessageBox.warning(self, "No Configurations", "Please generate configurations first.")
+            return
+
+        try:
+            # Ask user for export directory
+            from PyQt5.QtWidgets import QFileDialog
+            export_dir = QFileDialog.getExistingDirectory(self, "Select Export Directory")
+
+            if not export_dir:
+                return
+
+            configurations = self.parent().esp32_configurations
+            exported_count = 0
+
+            for unit_name, config_content in configurations.items():
+                file_path = os.path.join(export_dir, f"{unit_name}_config.h")
+
+                with open(file_path, 'w') as f:
+                    f.write(config_content)
+
+                exported_count += 1
+                self.log_status(f"Exported configuration for {unit_name}")
+
+            QMessageBox.information(self, "Export Complete",
+                                  f"Successfully exported {exported_count} configuration files to:\n{export_dir}")
+
+        except Exception as e:
+            logger.error(f"Error exporting configurations: {str(e)}")
+            QMessageBox.critical(self, "Export Error", f"Error exporting configurations: {str(e)}")
+
+    def log_status(self, message):
+        """Add a status message to the status text area."""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.status_text.append(f"[{timestamp}] {message}")
+
+class BeaconTestingTab(QWidget):
+    """Tab for testing beacon integration and monitoring."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.monitoring = False
+        self.mqtt_client = None
+        self.init_ui()
+
+    def init_ui(self):
+        """Initialize the UI components."""
+        layout = QVBoxLayout(self)
+
+        # Instructions
+        instructions = QLabel(
+            "Test the beacon integration and monitor real-time beacon detection. "
+            "Use these tools to verify that your ESP32 units are properly detecting beacons."
+        )
+        instructions.setWordWrap(True)
+        instructions.setStyleSheet("background-color: #f0f8ff; padding: 10px; border: 1px solid #ccc; border-radius: 5px;")
+        layout.addWidget(instructions)
+
+        # Testing controls
+        test_group = QGroupBox("Testing Controls")
+        test_layout = QVBoxLayout()
+
+        # MQTT connection test
+        mqtt_layout = QHBoxLayout()
+        mqtt_layout.addWidget(QLabel("MQTT Broker:"))
+
+        self.mqtt_host_input = QLineEdit("172.20.10.8")
+        mqtt_layout.addWidget(self.mqtt_host_input)
+
+        self.mqtt_port_input = QLineEdit("1883")
+        self.mqtt_port_input.setMaximumWidth(80)
+        mqtt_layout.addWidget(self.mqtt_port_input)
+
+        test_mqtt_button = QPushButton("Test MQTT Connection")
+        test_mqtt_button.clicked.connect(self.test_mqtt_connection)
+        mqtt_layout.addWidget(test_mqtt_button)
+
+        test_layout.addLayout(mqtt_layout)
+
+        # Monitoring controls
+        monitor_layout = QHBoxLayout()
+
+        self.monitor_button = QPushButton("Start Monitoring")
+        self.monitor_button.clicked.connect(self.toggle_monitoring)
+        monitor_layout.addWidget(self.monitor_button)
+
+        clear_button = QPushButton("Clear Log")
+        clear_button.clicked.connect(self.clear_log)
+        monitor_layout.addWidget(clear_button)
+
+        monitor_layout.addStretch()
+        test_layout.addLayout(monitor_layout)
+
+        test_group.setLayout(test_layout)
+        layout.addWidget(test_group)
+
+        # Monitoring log
+        log_group = QGroupBox("Real-time Monitoring Log")
+        log_layout = QVBoxLayout()
+
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setPlaceholderText("Monitoring messages will appear here...")
+        log_layout.addWidget(self.log_text)
+
+        log_group.setLayout(log_layout)
+        layout.addWidget(log_group)
+
+    def test_mqtt_connection(self):
+        """Test MQTT broker connection."""
+        try:
+            import paho.mqtt.client as mqtt
+
+            host = self.mqtt_host_input.text().strip()
+            port = int(self.mqtt_port_input.text().strip())
+
+            if not host:
+                QMessageBox.warning(self, "Input Error", "Please enter MQTT broker host.")
+                return
+
+            # Create test client
+            test_client = mqtt.Client()
+
+            def on_connect(client, userdata, flags, rc):
+                if rc == 0:
+                    self.log_message("✓ MQTT connection successful")
+                    QMessageBox.information(self, "Connection Test", "Successfully connected to MQTT broker!")
+                    client.disconnect()
+                else:
+                    self.log_message(f"✗ MQTT connection failed (code {rc})")
+                    QMessageBox.warning(self, "Connection Test", f"Failed to connect to MQTT broker (code {rc})")
+
+            def on_disconnect(client, userdata, rc):
+                self.log_message("MQTT disconnected")
+
+            test_client.on_connect = on_connect
+            test_client.on_disconnect = on_disconnect
+
+            self.log_message(f"Testing MQTT connection to {host}:{port}...")
+            test_client.connect(host, port, 60)
+            test_client.loop_start()
+
+            # Stop the loop after a short time
+            QTimer.singleShot(3000, lambda: test_client.loop_stop())
+
+        except ValueError:
+            QMessageBox.warning(self, "Input Error", "Please enter a valid port number.")
+        except Exception as e:
+            logger.error(f"Error testing MQTT connection: {str(e)}")
+            QMessageBox.critical(self, "Connection Error", f"Error testing MQTT connection: {str(e)}")
+
+    def toggle_monitoring(self):
+        """Start or stop monitoring beacon detection."""
+        if not self.monitoring:
+            self.start_monitoring()
+        else:
+            self.stop_monitoring()
+
+    def start_monitoring(self):
+        """Start monitoring beacon detection messages."""
+        try:
+            import paho.mqtt.client as mqtt
+
+            host = self.mqtt_host_input.text().strip()
+            port = int(self.mqtt_port_input.text().strip())
+
+            if not host:
+                QMessageBox.warning(self, "Input Error", "Please enter MQTT broker host.")
+                return
+
+            self.mqtt_client = mqtt.Client()
+            self.mqtt_client.on_connect = self.on_mqtt_connect
+            self.mqtt_client.on_message = self.on_mqtt_message
+            self.mqtt_client.on_disconnect = self.on_mqtt_disconnect
+
+            self.log_message(f"Connecting to MQTT broker at {host}:{port}...")
+            self.mqtt_client.connect(host, port, 60)
+            self.mqtt_client.loop_start()
+
+            self.monitoring = True
+            self.monitor_button.setText("Stop Monitoring")
+            self.monitor_button.setStyleSheet("background-color: #f44336; color: white;")
+
+        except ValueError:
+            QMessageBox.warning(self, "Input Error", "Please enter a valid port number.")
+        except Exception as e:
+            logger.error(f"Error starting monitoring: {str(e)}")
+            QMessageBox.critical(self, "Monitoring Error", f"Error starting monitoring: {str(e)}")
+
+    def stop_monitoring(self):
+        """Stop monitoring beacon detection messages."""
+        if self.mqtt_client:
+            self.mqtt_client.loop_stop()
+            self.mqtt_client.disconnect()
+            self.mqtt_client = None
+
+        self.monitoring = False
+        self.monitor_button.setText("Start Monitoring")
+        self.monitor_button.setStyleSheet("")
+        self.log_message("Monitoring stopped")
+
+    def on_mqtt_connect(self, client, userdata, flags, rc):
+        """MQTT connection callback."""
+        if rc == 0:
+            self.log_message("✓ Connected to MQTT broker")
+
+            # Subscribe to relevant topics
+            topics = [
+                "consultease/faculty/+/status",
+                "consultease/faculty/+/mac_status",
+                "consultease/faculty/+/requests",
+                "professor/status",
+                "professor/messages"
+            ]
+
+            for topic in topics:
+                client.subscribe(topic)
+                self.log_message(f"Subscribed to {topic}")
+
+        else:
+            self.log_message(f"✗ Failed to connect to MQTT broker (code {rc})")
+
+    def on_mqtt_message(self, client, userdata, msg):
+        """MQTT message callback."""
+        try:
+            topic = msg.topic
+            payload = msg.payload.decode()
+
+            # Format message for display
+            if topic.endswith("/mac_status"):
+                # Parse JSON payload for MAC status
+                try:
+                    import json
+                    data = json.loads(payload)
+                    status = data.get("status", "unknown")
+                    mac = data.get("mac", "unknown")
+                    faculty_id = topic.split("/")[2]
+
+                    if status == "faculty_present":
+                        self.log_message(f"🟢 Faculty {faculty_id} PRESENT (Beacon: {mac})", "green")
+                    elif status == "faculty_absent":
+                        self.log_message(f"🔴 Faculty {faculty_id} ABSENT (Beacon: {mac})", "red")
+                    else:
+                        self.log_message(f"📡 Faculty {faculty_id}: {status} (Beacon: {mac})")
+
+                except json.JSONDecodeError:
+                    self.log_message(f"📡 {topic}: {payload}")
+            else:
+                # Regular message
+                if payload in ["keychain_connected", "faculty_present"]:
+                    self.log_message(f"🟢 {topic}: {payload}", "green")
+                elif payload in ["keychain_disconnected", "faculty_absent"]:
+                    self.log_message(f"🔴 {topic}: {payload}", "red")
+                else:
+                    self.log_message(f"📡 {topic}: {payload}")
+
+        except Exception as e:
+            self.log_message(f"Error processing message: {str(e)}", "red")
+
+    def on_mqtt_disconnect(self, client, userdata, rc):
+        """MQTT disconnect callback."""
+        self.log_message("Disconnected from MQTT broker")
+
+    def clear_log(self):
+        """Clear the monitoring log."""
+        self.log_text.clear()
+        self.log_message("Log cleared")
+
+    def log_message(self, message, color=None):
+        """Add a message to the monitoring log."""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S")
+
+        if color:
+            formatted_message = f'<span style="color: {color};">[{timestamp}] {message}</span>'
+            self.log_text.append(formatted_message)
+        else:
+            self.log_text.append(f"[{timestamp}] {message}")
+
+        # Auto-scroll to bottom
+        scrollbar = self.log_text.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
 
 class FacultyDialog(QDialog):
     """
@@ -1685,7 +2648,7 @@ class SystemMaintenanceTab(QWidget):
         password_form.addRow("Confirm Password:", self.confirm_password_input)
 
         change_password_button = QPushButton("Change Password")
-        change_password_button.clicked.connect(self.change_admin_password)
+        change_password_button.clicked.connect(self.open_password_change_dialog)
         password_form.addRow("", change_password_button)
 
         admin_layout.addLayout(password_form)
@@ -1723,6 +2686,36 @@ class SystemMaintenanceTab(QWidget):
 
         faculty_desk_group.setLayout(faculty_desk_layout)
         main_layout.addWidget(faculty_desk_group)
+
+        # Beacon Management section
+        beacon_group = QGroupBox("nRF51822 Beacon Management")
+        beacon_layout = QVBoxLayout()
+
+        # Quick access to beacon management
+        beacon_info_label = QLabel(
+            "Manage nRF51822 BLE beacons for faculty presence detection. "
+            "Configure beacon MAC addresses and assign them to faculty members."
+        )
+        beacon_info_label.setWordWrap(True)
+        beacon_info_label.setStyleSheet("margin-bottom: 10px; color: #666;")
+        beacon_layout.addWidget(beacon_info_label)
+
+        beacon_button_layout = QHBoxLayout()
+
+        open_beacon_mgmt_button = QPushButton("Open Beacon Management")
+        open_beacon_mgmt_button.setStyleSheet("background-color: #2196F3; color: white;")
+        open_beacon_mgmt_button.clicked.connect(self.open_beacon_management_from_system)
+        beacon_button_layout.addWidget(open_beacon_mgmt_button)
+
+        test_beacon_button = QPushButton("Test Beacon Detection")
+        test_beacon_button.clicked.connect(self.test_beacon_detection)
+        beacon_button_layout.addWidget(test_beacon_button)
+
+        beacon_button_layout.addStretch()
+        beacon_layout.addLayout(beacon_button_layout)
+
+        beacon_group.setLayout(beacon_layout)
+        main_layout.addWidget(beacon_group)
 
         # System settings section
         settings_group = QGroupBox("System Settings")
@@ -2207,6 +3200,71 @@ class SystemMaintenanceTab(QWidget):
         except Exception as e:
             logger.error(f"Error changing admin password: {str(e)}")
             QMessageBox.critical(self, "Password Change Error", f"Error changing password: {str(e)}")
+
+    def open_password_change_dialog(self):
+        """
+        Open the enhanced password change dialog.
+        """
+        try:
+            # Get the current admin info from the parent window
+            parent_window = self.window()
+            if not hasattr(parent_window, 'admin') or not parent_window.admin:
+                QMessageBox.warning(self, "Admin Error", "No admin user is currently logged in.")
+                return
+
+            # Import the password change dialog
+            from .password_change_dialog import PasswordChangeDialog
+
+            # Create admin info dictionary
+            if isinstance(parent_window.admin, dict):
+                admin_info = parent_window.admin
+            else:
+                admin_info = {
+                    'id': parent_window.admin.id,
+                    'username': parent_window.admin.username
+                }
+
+            # Create and show the dialog
+            dialog = PasswordChangeDialog(admin_info, forced_change=False, parent=self)
+
+            def on_password_changed(success):
+                if success:
+                    # Clear the old password input fields
+                    self.current_password_input.clear()
+                    self.new_password_input.clear()
+                    self.confirm_password_input.clear()
+                    logger.info(f"Password changed successfully for admin: {admin_info['username']}")
+
+            dialog.password_changed.connect(on_password_changed)
+            dialog.exec_()
+
+        except Exception as e:
+            logger.error(f"Error opening password change dialog: {str(e)}")
+            QMessageBox.critical(self, "Error", f"An error occurred while opening the password change dialog: {str(e)}")
+
+    def open_beacon_management_from_system(self):
+        """
+        Open beacon management dialog from system maintenance tab.
+        """
+        try:
+            dialog = BeaconManagementDialog(parent=self)
+            dialog.exec_()
+        except Exception as e:
+            logger.error(f"Error opening beacon management: {str(e)}")
+            QMessageBox.critical(self, "Beacon Management Error", f"Error opening beacon management: {str(e)}")
+
+    def test_beacon_detection(self):
+        """
+        Test beacon detection by opening the testing tab directly.
+        """
+        try:
+            dialog = BeaconManagementDialog(parent=self)
+            # Switch to testing tab
+            dialog.tab_widget.setCurrentIndex(3)  # Testing tab is index 3
+            dialog.exec_()
+        except Exception as e:
+            logger.error(f"Error opening beacon testing: {str(e)}")
+            QMessageBox.critical(self, "Beacon Testing Error", f"Error opening beacon testing: {str(e)}")
 
     def save_settings(self):
         """

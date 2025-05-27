@@ -25,7 +25,7 @@ class AdminController:
             password (str): Admin password
 
         Returns:
-            Admin: Admin object if authenticated, None otherwise
+            dict: Authentication result with admin object and status, None if failed
         """
         try:
             db = get_db()
@@ -38,9 +38,30 @@ class AdminController:
             if admin.check_password(password):
                 logger.info(f"Admin authenticated: {username}")
                 self.current_admin = admin
-                return admin
+
+                # Log successful authentication
+                from ..utils.audit_logger import log_authentication
+                log_authentication(username, True, details="Admin login successful")
+
+                # Check if password change is required
+                if admin.needs_password_change():
+                    logger.warning(f"Admin {username} requires password change")
+                    return {
+                        'admin': admin,
+                        'requires_password_change': True,
+                        'message': 'Password change required. Please update your password.'
+                    }
+                else:
+                    return {
+                        'admin': admin,
+                        'requires_password_change': False,
+                        'message': 'Authentication successful'
+                    }
             else:
                 logger.warning(f"Invalid password for admin: {username}")
+                # Log failed authentication
+                from ..utils.audit_logger import log_authentication
+                log_authentication(username, False, details="Invalid password")
                 return None
         except Exception as e:
             logger.error(f"Error authenticating admin: {str(e)}")
@@ -143,18 +164,23 @@ class AdminController:
                 logger.warning(error_msg)
                 return False, [error_msg]
 
-            # Hash new password
-            password_hash, salt = Admin.hash_password(new_password)
+            # Update password using the admin model method
+            if admin.update_password(new_password):
+                db.commit()
+                logger.info(f"Changed password for admin: {admin.username}")
 
-            # Update admin
-            admin.password_hash = password_hash
-            admin.salt = salt
+                # Log password change
+                from ..utils.audit_logger import get_audit_logger
+                audit_logger = get_audit_logger()
+                audit_logger.log_password_change(
+                    admin.id,
+                    admin.username,
+                    forced=admin.force_password_change
+                )
 
-            db.commit()
-
-            logger.info(f"Changed password for admin: {admin.username}")
-
-            return True, []
+                return True, []
+            else:
+                return False, ["Password update failed"]
         except Exception as e:
             error_msg = f"Error changing admin password: {str(e)}"
             logger.error(error_msg)

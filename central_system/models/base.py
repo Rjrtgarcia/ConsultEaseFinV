@@ -114,13 +114,26 @@ def get_db(force_new=False, max_retries=3):
             # Get a session from the pool
             db = SessionLocal()
 
-            # Test the connection with a simple query
+            # Enhanced connection test with health check
             try:
-                db.execute("SELECT 1")
+                result = db.execute("SELECT 1 as health_check")
+                health_check = result.fetchone()
+                if not health_check or health_check[0] != 1:
+                    raise DatabaseConnectionError("Health check failed")
                 logger.debug(f"Database connection test successful (attempt {attempt + 1})")
             except Exception as test_error:
                 db.close()
-                raise DatabaseConnectionError(f"Database connection test failed: {test_error}")
+                logger.warning(f"Database connection test failed: {test_error}")
+
+                # Implement exponential backoff for retries
+                if attempt < max_retries - 1:
+                    wait_time = min(2 ** attempt, 30)  # Max 30 seconds
+                    logger.info(f"Waiting {wait_time} seconds before retry...")
+                    import time
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise DatabaseConnectionError(f"Database connection test failed after {max_retries} attempts: {test_error}")
 
             # If force_new is True, ensure we're getting fresh data
             if force_new:
@@ -291,52 +304,60 @@ def init_db():
         # Check if admin table is empty
         admin_count = db.query(Admin).count()
         if admin_count == 0:
-            # Create default admin with bcrypt hashed password
-            password_hash, salt = Admin.hash_password("Admin123!")
+            # Create default admin with temporary password that must be changed
+            password_hash, salt = Admin.hash_password("TempPass123!")
             default_admin = Admin(
                 username="admin",
                 password_hash=password_hash,
                 salt=salt,
                 email="admin@consultease.com",
-                is_active=True
+                is_active=True,
+                force_password_change=True  # Force password change on first login
             )
             db.add(default_admin)
-            logger.info("Created default admin user: admin / Admin123!")
+            logger.warning("Created default admin with temporary password - MUST BE CHANGED ON FIRST LOGIN")
+            logger.warning("Default credentials: admin / TempPass123! - CHANGE IMMEDIATELY")
 
         # Check if faculty table is empty
         faculty_count = db.query(Faculty).count()
         if faculty_count == 0:
-            # Create some sample faculty with MAC addresses for testing
+            # Create sample faculty for nRF51822 beacon integration
+            # Note: BLE IDs will be updated with actual beacon MAC addresses during configuration
             sample_faculty = [
                 Faculty(
                     name="Dr. John Smith",
                     department="Computer Science",
                     email="john.smith@university.edu",
-                    ble_id="11:22:33:44:55:66",  # MAC address format
-                    status=True  # Set to True to make Dr. John Smith available for testing
+                    ble_id="00:00:00:00:00:01",  # Placeholder - will be updated with actual beacon MAC
+                    status=False  # Will be updated by beacon detection
                 ),
                 Faculty(
                     name="Dr. Jane Doe",
                     department="Mathematics",
                     email="jane.doe@university.edu",
-                    ble_id="AA:BB:CC:DD:EE:FF",  # MAC address format
-                    status=False
+                    ble_id="00:00:00:00:00:02",  # Placeholder - will be updated with actual beacon MAC
+                    status=False  # Will be updated by beacon detection
                 ),
                 Faculty(
                     name="Prof. Robert Chen",
                     department="Computer Science",
                     email="robert.chen@university.edu",
-                    ble_id="4F:AF:C2:01:1F:B5",  # MAC address format (matches config.h)
-                    status=True,  # Set to available for testing
-                    always_available=True  # This faculty member is always available (BLE always on)
+                    ble_id="00:00:00:00:00:03",  # Placeholder - will be updated with actual beacon MAC
+                    status=False  # Will be updated by beacon detection
                 ),
                 Faculty(
                     name="Jeysibn",
                     department="Computer Science",
                     email="jeysibn@university.edu",
-                    ble_id="12:34:56:78:9A:BC",  # MAC address format for the configured faculty
-                    status=False,  # Will be updated by MAC detection
-                    always_available=False
+                    ble_id="00:00:00:00:00:04",  # Placeholder - will be updated with actual beacon MAC
+                    status=False  # Will be updated by beacon detection
+                ),
+                Faculty(
+                    name="Dr. Maria Santos",
+                    department="Information Technology",
+                    email="maria.santos@university.edu",
+                    ble_id="00:00:00:00:00:05",  # Placeholder - will be updated with actual beacon MAC
+                    status=False  # Will be updated by beacon detection
                 )
             ]
             db.add_all(sample_faculty)

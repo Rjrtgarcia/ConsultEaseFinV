@@ -2,6 +2,40 @@
 
 This guide provides comprehensive instructions for deploying the complete ConsultEase system, including both the Central System (Raspberry Pi) and the Faculty Desk Units (ESP32). This guide incorporates all recent improvements to the system.
 
+## 🚀 Production Readiness Status
+
+**Current Version**: Production Ready ✅
+**Security Level**: Enhanced with audit logging and forced password changes
+**Performance**: Optimized with queue management and system monitoring
+**Reliability**: Hardware validation and error recovery implemented
+
+## ⚠️ CRITICAL SECURITY NOTICE
+
+**Default Admin Credentials**: The system creates a default admin account with temporary credentials that MUST be changed on first login:
+- Username: `admin`
+- Password: `TempPass123!`
+
+**This password MUST be changed immediately after first login for security.**
+
+## 🔧 New Features in This Release
+
+### Security Enhancements
+- **Forced Password Changes**: Admins must change default/expired passwords
+- **Password Strength Validation**: Enforced strong password requirements
+- **Audit Logging**: Complete audit trail for all security events
+- **Enhanced Authentication**: Improved login security with session management
+
+### Performance Improvements
+- **MQTT Queue Management**: Prevents memory exhaustion during network issues
+- **Database Resilience**: Enhanced connection retry logic with exponential backoff
+- **System Monitoring**: Real-time performance monitoring and alerting
+- **Hardware Validation**: Startup validation of all required components
+
+### User Interface
+- **Enhanced Password Change Dialog**: Modern, user-friendly password change interface
+- **System Monitoring Dashboard**: Real-time system health monitoring in admin panel
+- **Improved Error Handling**: Better error messages and recovery mechanisms
+
 ## Table of Contents
 
 1. [Hardware Requirements](#hardware-requirements)
@@ -86,14 +120,19 @@ This guide provides comprehensive instructions for deploying the complete Consul
    ```bash
    sudo apt install mosquitto mosquitto-clients -y
    ```
-2. Configure Mosquitto:
+2. Configure Mosquitto with authentication:
    ```bash
+   # Create password file
+   sudo mosquitto_passwd -c /etc/mosquitto/passwd consultease_user
+
+   # Configure Mosquitto
    sudo nano /etc/mosquitto/mosquitto.conf
    ```
    Add these lines:
    ```
    listener 1883
-   allow_anonymous true
+   allow_anonymous false
+   password_file /etc/mosquitto/passwd
    ```
 3. Start and enable the Mosquitto service:
    ```bash
@@ -159,6 +198,13 @@ This guide provides comprehensive instructions for deploying the complete Consul
    StandardError=inherit
    Restart=always
    User=pi
+   Environment=DISPLAY=:0
+   Environment=XAUTHORITY=/home/pi/.Xauthority
+   Environment=CONSULTEASE_KEYBOARD=squeekboard
+   Environment=PYTHONUNBUFFERED=1
+   Environment=MQTT_USERNAME=consultease_user
+   Environment=MQTT_PASSWORD=consultease_secure_password
+   Environment=CONSULTEASE_FULLSCREEN=true
 
    [Install]
    WantedBy=multi-user.target

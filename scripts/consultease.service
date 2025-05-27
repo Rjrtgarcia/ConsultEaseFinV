@@ -14,6 +14,9 @@ Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/pi/.Xauthority
 Environment=CONSULTEASE_KEYBOARD=squeekboard
 Environment=PYTHONUNBUFFERED=1
+Environment=MQTT_USERNAME=consultease_user
+Environment=MQTT_PASSWORD=consultease_secure_password
+Environment=CONSULTEASE_FULLSCREEN=true
 
 # Logging
 StandardOutput=journal

@@ -1,15 +1,14 @@
 #include <WiFi.h>
 #include <PubSubClient.h>  // MQTT client
 #include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
 #include <SPI.h>
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <Adafruit_ST7789.h> // Hardware-specific library for ST7789
 #include <time.h>
+#include <WiFiUdp.h>         // For NTP client
+#include <NTPClient.h>       // NTP client library
 #include "config.h"          // Include configuration file
 
 // Current Date/Time and User
@@ -25,27 +24,19 @@ const char* mqtt_server = MQTT_SERVER;
 const int mqtt_port = MQTT_PORT;
 char mqtt_topic_messages[50];
 char mqtt_topic_status[50];
+char mqtt_topic_mac_status[50];
 char mqtt_topic_legacy_messages[50];
 char mqtt_topic_legacy_status[50];
 char mqtt_client_id[50];
 
-// BLE UUIDs - Standardized across all components
-#define SERVICE_UUID        "91BAD35B-F3CB-4FC1-8603-88D5137892A6"
-#define CHARACTERISTIC_UUID "D9473AA3-E6F4-424B-B6E7-A5F94FDDA285"
+// Faculty Beacon MAC Address - nRF51822 BLE Beacon
+// This ESP32 unit is configured to detect only its assigned faculty member's beacon
+// The MAC address is defined in config.h as FACULTY_BEACON_MAC
+// IMPORTANT: Update FACULTY_BEACON_MAC in config.h with the actual nRF51822 beacon MAC address
+const char* assignedFacultyBeaconMac = FACULTY_BEACON_MAC;
 
-// Faculty MAC Addresses Definition
-const char* FACULTY_MAC_ADDRESSES[MAX_FACULTY_MAC_ADDRESSES] = {
-  "11:22:33:44:55:66",  // Dr. John Smith's device
-  "AA:BB:CC:DD:EE:FF",  // Dr. Jane Doe's device
-  "4F:AF:C2:01:1F:B5",  // Prof. Robert Chen's device
-  "12:34:56:78:9A:BC",  // Jeysibn's device (matches FACULTY_ID 3)
-  ""                    // Empty slot for additional faculty
-};
-
-// BLE Connection Management (Legacy - for backward compatibility)
-unsigned long lastBleSignalTime = 0;
+// Status update timing
 unsigned long lastStatusUpdate = 0;
-int bleReconnectAttempts = 0;
 
 // MAC Address Detection Variables
 BLEScan* pBLEScan = nullptr;
@@ -68,18 +59,29 @@ String lastDetectedMac = "";
 // Initialize the ST7789 display with hardware SPI
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
 
-// Time settings
-const char* ntpServer = "pool.ntp.org";
-const long  gmtOffset_sec = 0;  // Adjust for your timezone
-const int   daylightOffset_sec = 3600;
+// NTP Time Synchronization Settings
+const char* ntpServer1 = NTP_SERVER_1;
+const char* ntpServer2 = NTP_SERVER_2;
+const char* ntpServer3 = NTP_SERVER_3;
+const long  gmtOffset_sec = TIMEZONE_OFFSET_HOURS * 3600;  // Convert hours to seconds
+const int   daylightOffset_sec = 0;    // Philippines doesn't use daylight saving time
+
+// NTP Client setup
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, ntpServer1, gmtOffset_sec, 60000); // Update every 60 seconds
+
+// Time synchronization variables
+bool ntpSyncSuccessful = false;
+bool ntpInitialized = false;
+unsigned long lastNtpSync = 0;
+unsigned long ntpSyncInterval = NTP_SYNC_INTERVAL_HOURS * 3600000; // Convert hours to milliseconds
+unsigned long ntpSyncRetryInterval = NTP_RETRY_INTERVAL_MINUTES * 60000; // Convert minutes to milliseconds
+int ntpSyncAttempts = 0;
+const int maxNtpSyncAttempts = NTP_MAX_RETRY_ATTEMPTS;
 
 // Variables
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
-BLEServer* pServer = NULL;
-BLECharacteristic* pCharacteristic = NULL;
-bool deviceConnected = false;
-bool oldDeviceConnected = false;
 char timeStringBuff[50];
 char dateStringBuff[50];
 String lastMessage = "";
@@ -93,6 +95,10 @@ unsigned long lastTimeUpdate = 0;
 #define NU_LIGHTGOLD 0xF710      // Lighter gold for highlights
 #define ST77XX_WHITE 0xFFFF      // White for text
 #define ST77XX_BLACK 0x0000      // Black for backgrounds
+#define ST77XX_GREEN 0x07E0      // Green for success indicators
+#define ST77XX_RED   0xF800      // Red for error indicators
+#define ST77XX_ORANGE 0xFD20     // Orange for warning indicators
+#define ST77XX_YELLOW 0xFFE0     // Yellow for warning indicators
 
 // Colors for the UI
 #define COLOR_BACKGROUND     NU_BLUE         // Changed to blue as primary color
@@ -115,42 +121,7 @@ unsigned long lastTimeUpdate = 0;
 // Gold accent width
 #define ACCENT_WIDTH 5
 
-// BLE Server Callbacks with improved connection handling
-class MyServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
-      deviceConnected = true;
-      lastBleSignalTime = millis();  // Record the time of connection
-      bleReconnectAttempts = 0;      // Reset reconnection attempts
 
-      // Publish to both standardized and legacy topics for backward compatibility
-      mqttClient.publish(mqtt_topic_status, "keychain_connected");
-      mqttClient.publish(mqtt_topic_legacy_status, "keychain_connected");
-
-      Serial.println("BLE client connected");
-
-      // Log connection details
-      Serial.print("Connection time: ");
-      Serial.println(lastBleSignalTime);
-    };
-
-    void onDisconnect(BLEServer* pServer) {
-      deviceConnected = false;
-
-      // Publish to both standardized and legacy topics for backward compatibility
-      mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
-      mqttClient.publish(mqtt_topic_legacy_status, "keychain_disconnected");
-
-      Serial.println("BLE client disconnected");
-      Serial.print("Disconnection time: ");
-      Serial.println(millis());
-
-      // Restart advertising so new clients can connect
-      BLEDevice::startAdvertising();
-
-      // Don't reset reconnection attempts here - we'll manage that in the main loop
-      // This allows proper tracking of reconnection attempts
-    }
-};
 
 // Function to process incoming messages and extract content from JSON if needed
 String processMessage(String message) {
@@ -243,20 +214,21 @@ bool isFacultyMacAddress(String mac) {
   // Normalize the detected MAC address
   String normalizedMac = normalizeMacAddress(mac);
 
-  // Check against known faculty MAC addresses
-  for (int i = 0; i < MAX_FACULTY_MAC_ADDRESSES; i++) {
-    if (strlen(FACULTY_MAC_ADDRESSES[i]) > 0) {
-      String knownMac = normalizeMacAddress(String(FACULTY_MAC_ADDRESSES[i]));
-      if (normalizedMac.equals(knownMac)) {
-        Serial.print("Matched faculty MAC: ");
-        Serial.print(normalizedMac);
-        Serial.print(" (Known as: ");
-        Serial.print(knownMac);
-        Serial.println(")");
-        return true;
-      }
-    }
+  // Check against this unit's assigned faculty beacon MAC address
+  String assignedMac = normalizeMacAddress(String(assignedFacultyBeaconMac));
+
+  // Only match if this is the assigned faculty member's beacon
+  if (normalizedMac.equals(assignedMac)) {
+    Serial.print("Matched assigned faculty beacon: ");
+    Serial.print(normalizedMac);
+    Serial.print(" (Faculty ID: ");
+    Serial.print(FACULTY_ID);
+    Serial.print(" - ");
+    Serial.print(FACULTY_NAME);
+    Serial.println(")");
+    return true;
   }
+
   return false;
 }
 
@@ -283,10 +255,18 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
 };
 
 void initializeBLEScanner() {
-  Serial.println("Initializing BLE Scanner for MAC address detection...");
+  Serial.println("Initializing BLE Scanner for nRF51822 beacon detection...");
+  Serial.print("Assigned Faculty: ");
+  Serial.print(FACULTY_NAME);
+  Serial.print(" (ID: ");
+  Serial.print(FACULTY_ID);
+  Serial.println(")");
+  Serial.print("Target Beacon MAC: ");
+  Serial.println(assignedFacultyBeaconMac);
 
   // Initialize BLE
-  BLEDevice::init("ConsultEase-Faculty-Scanner");
+  String deviceName = "ConsultEase-Faculty-" + String(FACULTY_ID);
+  BLEDevice::init(deviceName.c_str());
 
   // Create BLE Scanner
   pBLEScan = BLEDevice::getScan();
@@ -295,7 +275,7 @@ void initializeBLEScanner() {
   pBLEScan->setInterval(100);
   pBLEScan->setWindow(99);
 
-  Serial.println("BLE Scanner initialized");
+  Serial.println("BLE Scanner initialized for single beacon detection");
   displaySystemStatus("BLE Scanner ready");
 }
 
@@ -314,24 +294,31 @@ void performBLEScan() {
 
   lastBleScanTime = currentTime;
 
-  Serial.println("Starting BLE scan for faculty devices...");
-  displaySystemStatus("Scanning for faculty...");
+  Serial.print("Starting BLE scan for ");
+  Serial.print(FACULTY_NAME);
+  Serial.println("'s beacon...");
+  displaySystemStatus("Scanning for beacon...");
 
   // Clear previous detection for this scan
   String previousDetectedMac = detectedFacultyMac;
   detectedFacultyMac = "";
 
   // Perform scan
-  BLEScanResults foundDevices = pBLEScan->start(BLE_SCAN_DURATION, false);
+  BLEScanResults* foundDevices = pBLEScan->start(BLE_SCAN_DURATION, false);
 
-  // Check if we detected any faculty member
+  // Check if we detected the assigned faculty member's beacon
   bool currentScanDetected = (detectedFacultyMac.length() > 0);
 
   if (currentScanDetected) {
-    Serial.print("Faculty detected in scan: ");
-    Serial.println(detectedFacultyMac);
+    Serial.print("Assigned faculty beacon detected: ");
+    Serial.print(detectedFacultyMac);
+    Serial.print(" (");
+    Serial.print(FACULTY_NAME);
+    Serial.println(")");
   } else {
-    Serial.println("No faculty devices detected in scan");
+    Serial.print("Assigned faculty beacon not detected (");
+    Serial.print(assignedFacultyBeaconMac);
+    Serial.println(")");
     macAbsenceCount++;
   }
 
@@ -342,7 +329,11 @@ void performBLEScan() {
   updateFacultyPresenceStatus();
 
   Serial.print("Scan complete. Found ");
-  Serial.print(foundDevices.getCount());
+  if (foundDevices) {
+    Serial.print(foundDevices->getCount());
+  } else {
+    Serial.print("0");
+  }
   Serial.println(" devices total");
 }
 
@@ -383,7 +374,8 @@ void updateFacultyPresenceStatus() {
       lastDetectedMac = detectedFacultyMac;
     }
 
-    Serial.print("Faculty presence changed: ");
+    Serial.print(FACULTY_NAME);
+    Serial.print(" presence changed: ");
     Serial.println(facultyPresent ? "PRESENT" : "ABSENT");
 
     // Publish status change via MQTT
@@ -402,31 +394,34 @@ void publishFacultyStatus() {
 
   if (facultyPresent) {
     status_message = "faculty_present";
-    detailed_status = "Faculty detected via MAC: " + lastDetectedMac;
+    detailed_status = String(FACULTY_NAME) + " detected via beacon: " + lastDetectedMac;
 
     // Also send legacy format for backward compatibility
     mqttClient.publish(mqtt_topic_status, "keychain_connected");
     mqttClient.publish(mqtt_topic_legacy_status, "keychain_connected");
 
-    Serial.println("Published faculty present status");
-    displaySystemStatus("Faculty Present");
+    Serial.print("Published ");
+    Serial.print(FACULTY_NAME);
+    Serial.println(" present status");
+    displaySystemStatus(String(FACULTY_NAME) + " Present");
   } else {
     status_message = "faculty_absent";
-    detailed_status = "No faculty MAC detected";
+    detailed_status = String(FACULTY_NAME) + " beacon not detected";
 
     // Also send legacy format for backward compatibility
     mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
     mqttClient.publish(mqtt_topic_legacy_status, "keychain_disconnected");
 
-    Serial.println("Published faculty absent status");
-    displaySystemStatus("Faculty Absent");
+    Serial.print("Published ");
+    Serial.print(FACULTY_NAME);
+    Serial.println(" absent status");
+    displaySystemStatus(String(FACULTY_NAME) + " Absent");
   }
 
   // Publish detailed status with MAC address information
-  String statusTopic = "consultease/faculty/" + String(FACULTY_ID) + "/mac_status";
   String statusPayload = "{\"status\":\"" + String(status_message) + "\",\"mac\":\"" + lastDetectedMac + "\",\"timestamp\":" + String(millis()) + "}";
 
-  mqttClient.publish(statusTopic.c_str(), statusPayload.c_str());
+  mqttClient.publish(mqtt_topic_mac_status, statusPayload.c_str());
 
   Serial.print("Published detailed status: ");
   Serial.println(statusPayload);
@@ -538,59 +533,234 @@ void testScreen() {
   tft.fillScreen(NU_BLUE);
 }
 
+// NTP Time Synchronization Functions
+void initializeNTP() {
+  Serial.println("Initializing NTP client...");
+  displaySystemStatus("Initializing NTP...");
+
+  timeClient.begin();
+  ntpInitialized = true;
+
+  // Try initial synchronization
+  syncTimeWithNTP();
+}
+
+bool syncTimeWithNTP() {
+  if (!ntpInitialized) {
+    Serial.println("NTP not initialized");
+    return false;
+  }
+
+  Serial.println("Attempting NTP time synchronization...");
+  displaySystemStatus("Syncing time...");
+
+  // Try primary NTP server
+  bool success = timeClient.update();
+
+  if (!success && ntpSyncAttempts < maxNtpSyncAttempts) {
+    Serial.println("Primary NTP server failed, trying alternative servers...");
+
+    // Try alternative servers
+    const char* servers[] = {ntpServer2, ntpServer3};
+    for (int i = 0; i < 2 && !success; i++) {
+      Serial.print("Trying NTP server: ");
+      Serial.println(servers[i]);
+
+      // Reinitialize with different server
+      timeClient.end();
+      timeClient = NTPClient(ntpUDP, servers[i], gmtOffset_sec, 60000);
+      timeClient.begin();
+
+      delay(1000); // Give time for initialization
+      success = timeClient.update();
+    }
+
+    // If alternative servers failed, go back to primary
+    if (!success) {
+      timeClient.end();
+      timeClient = NTPClient(ntpUDP, ntpServer1, gmtOffset_sec, 60000);
+      timeClient.begin();
+    }
+  }
+
+  if (success) {
+    // Get the epoch time from NTP
+    unsigned long epochTime = timeClient.getEpochTime();
+
+    // Set the system time using the built-in ESP32 time functions
+    struct timeval tv;
+    tv.tv_sec = epochTime;
+    tv.tv_usec = 0;
+    settimeofday(&tv, NULL);
+
+    // Also configure timezone for ESP32 internal clock
+    setenv("TZ", "PHT-8", 1); // Philippines Time UTC+8
+    tzset();
+
+    ntpSyncSuccessful = true;
+    lastNtpSync = millis();
+    ntpSyncAttempts = 0;
+
+    Serial.println("NTP synchronization successful!");
+    Serial.print("Current time: ");
+    Serial.println(timeClient.getFormattedTime());
+
+    displaySystemStatus("Time synced successfully");
+
+    // Show sync success indicator on display
+    showTimeSyncIndicator(true);
+
+    return true;
+  } else {
+    ntpSyncSuccessful = false;
+    ntpSyncAttempts++;
+
+    Serial.print("NTP synchronization failed (attempt ");
+    Serial.print(ntpSyncAttempts);
+    Serial.print("/");
+    Serial.print(maxNtpSyncAttempts);
+    Serial.println(")");
+
+    displaySystemStatus("Time sync failed");
+
+    // Show sync failure indicator on display
+    showTimeSyncIndicator(false);
+
+    return false;
+  }
+}
+
+void showTimeSyncIndicator(bool success) {
+  // Show a small indicator in the top-right corner of the header
+  int indicatorX = tft.width() - 25;
+  int indicatorY = 5;
+  int indicatorSize = 8;
+
+  if (success) {
+    // Green circle for successful sync
+    tft.fillCircle(indicatorX, indicatorY + indicatorSize/2, indicatorSize/2, ST77XX_GREEN);
+    tft.drawCircle(indicatorX, indicatorY + indicatorSize/2, indicatorSize/2, COLOR_TEXT);
+  } else {
+    // Red circle for failed sync
+    tft.fillCircle(indicatorX, indicatorY + indicatorSize/2, indicatorSize/2, ST77XX_RED);
+    tft.drawCircle(indicatorX, indicatorY + indicatorSize/2, indicatorSize/2, COLOR_TEXT);
+  }
+
+  // Show indicator for 3 seconds
+  delay(3000);
+
+  // Clear the indicator area and redraw header
+  tft.fillRect(indicatorX - indicatorSize, indicatorY, indicatorSize * 2, indicatorSize + 5, COLOR_HEADER);
+}
+
+void checkPeriodicTimeSync() {
+  unsigned long currentTime = millis();
+
+  // Check if it's time for periodic sync
+  if (ntpSyncSuccessful && (currentTime - lastNtpSync > ntpSyncInterval)) {
+    Serial.println("Performing periodic NTP synchronization...");
+    syncTimeWithNTP();
+  }
+  // If last sync failed, retry more frequently
+  else if (!ntpSyncSuccessful && (currentTime - lastNtpSync > ntpSyncRetryInterval)) {
+    Serial.println("Retrying NTP synchronization...");
+    syncTimeWithNTP();
+  }
+}
+
+String getFormattedTime() {
+  if (ntpSyncSuccessful && ntpInitialized) {
+    // Use NTP synchronized time
+    timeClient.update(); // Update to get latest time
+    return timeClient.getFormattedTime();
+  } else {
+    // Fallback to ESP32 internal RTC
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+      char timeStr[10];
+      strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+      return String(timeStr);
+    } else {
+      // Last resort: use hardcoded time
+      String dateTime = String(current_date_time);
+      return dateTime.substring(11); // Extract time part
+    }
+  }
+}
+
+String getFormattedDate() {
+  if (ntpSyncSuccessful && ntpInitialized) {
+    // Use NTP synchronized time
+    time_t epochTime = timeClient.getEpochTime();
+    struct tm *ptm = gmtime(&epochTime);
+
+    char dateStr[12];
+    sprintf(dateStr, "%04d-%02d-%02d",
+            ptm->tm_year + 1900,
+            ptm->tm_mon + 1,
+            ptm->tm_mday);
+    return String(dateStr);
+  } else {
+    // Fallback to ESP32 internal RTC
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+      char dateStr[12];
+      strftime(dateStr, sizeof(dateStr), "%Y-%m-%d", &timeinfo);
+      return String(dateStr);
+    } else {
+      // Last resort: use hardcoded date
+      String dateTime = String(current_date_time);
+      return dateTime.substring(0, 10); // Extract date part
+    }
+  }
+}
+
 // Function to draw the header with time and date
 void updateTimeDisplay() {
-  struct tm timeinfo;
-
   // Clear only the header area, preserving the gold accent
   tft.fillRect(ACCENT_WIDTH, 0, tft.width() - ACCENT_WIDTH, HEADER_HEIGHT, COLOR_HEADER);
 
-  // Get the current time
-  if(!getLocalTime(&timeinfo)){
-    Serial.println("Failed to obtain time");
+  // Get current time using NTP-synchronized time
+  String timeStr = getFormattedTime();
+  String dateStr = getFormattedDate();
 
-    // Use provided time if NTP fails
-    // Parse the date and time from current_date_time string
-    String dateTime = String(current_date_time);
-    String date = dateTime.substring(0, 10);  // "2025-05-02"
-    String time = dateTime.substring(11);     // "09:46:02"
-
-    // Draw time on left
-    tft.setTextColor(COLOR_TEXT);
-    tft.setTextSize(2);
-    tft.setCursor(ACCENT_WIDTH + 5, 10);
-    tft.print(time);
-
-    // Draw date on right
-    int16_t x1, y1;
-    uint16_t w, h;
-    tft.getTextBounds(date, 0, 0, &x1, &y1, &w, &h);
-    tft.setCursor(tft.width() - w - 10, 10);
-    tft.print(date);
-
-    // Ensure gold accent is intact
-    drawGoldAccent();
-    return;
+  // Convert time from HH:MM:SS to HH:MM for display
+  if (timeStr.length() >= 5) {
+    timeStr = timeStr.substring(0, 5); // Extract HH:MM
   }
 
-  // Format time (HH:MM:SS)
-  strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M:%S", &timeinfo);
-
-  // Format date (YYYY-MM-DD)
-  strftime(dateStringBuff, sizeof(dateStringBuff), "%Y-%m-%d", &timeinfo);
+  // Convert date from YYYY-MM-DD to MM/DD/YYYY for display
+  if (dateStr.length() >= 10) {
+    String year = dateStr.substring(0, 4);
+    String month = dateStr.substring(5, 7);
+    String day = dateStr.substring(8, 10);
+    dateStr = month + "/" + day + "/" + year;
+  }
 
   // Draw time on left
   tft.setTextColor(COLOR_TEXT);
   tft.setTextSize(2);
   tft.setCursor(ACCENT_WIDTH + 5, 10);
-  tft.print(timeStringBuff);
+  tft.print(timeStr);
 
   // Draw date on right
   int16_t x1, y1;
   uint16_t w, h;
-  tft.getTextBounds(dateStringBuff, 0, 0, &x1, &y1, &w, &h);
+  tft.getTextBounds(dateStr, 0, 0, &x1, &y1, &w, &h);
   tft.setCursor(tft.width() - w - 10, 10);
-  tft.print(dateStringBuff);
+  tft.print(dateStr);
+
+  // Show time sync status indicator (small dot in top-right corner)
+  int statusX = tft.width() - 15;
+  int statusY = 8;
+
+  if (ntpSyncSuccessful) {
+    // Green dot for successful NTP sync
+    tft.fillCircle(statusX, statusY, 3, ST77XX_GREEN);
+  } else {
+    // Orange dot for fallback time (no NTP sync)
+    tft.fillCircle(statusX, statusY, 3, ST77XX_ORANGE);
+  }
 
   // Ensure gold accent is intact
   drawGoldAccent();
@@ -711,15 +881,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
   // Restore the time display
   updateTimeDisplay();
-
-  // Also forward to connected BLE device if any
-  if (deviceConnected) {
-    pCharacteristic->setValue(message.c_str());
-    pCharacteristic->notify();
-
-    // Update the last BLE signal time
-    lastBleSignalTime = millis();
-  }
 }
 
 // Draw the main UI framework - truly seamless design
@@ -926,6 +1087,7 @@ void setup() {
   // Initialize MQTT topics with faculty ID - both standardized and legacy
   sprintf(mqtt_topic_messages, MQTT_TOPIC_REQUESTS, FACULTY_ID);
   sprintf(mqtt_topic_status, MQTT_TOPIC_STATUS, FACULTY_ID);
+  sprintf(mqtt_topic_mac_status, MQTT_TOPIC_MAC_STATUS, FACULTY_ID);
   strcpy(mqtt_topic_legacy_messages, MQTT_LEGACY_MESSAGES);
   strcpy(mqtt_topic_legacy_status, MQTT_LEGACY_STATUS);
   sprintf(mqtt_client_id, "DeskUnit_%s", FACULTY_NAME);
@@ -998,87 +1160,35 @@ void setup() {
   // Set up WiFi - this will clear the welcome message but preserve gold accent
   setup_wifi();
 
-  // Configure time
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  // Initialize NTP time synchronization after WiFi is connected
+  initializeNTP();
+
+  // Configure time (legacy ESP32 time configuration as fallback)
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer1);
 
   // Initialize MQTT
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(callback);
 
   // Initialize BLE Scanner for MAC address detection
-  if (BLE_DETECTION_MODE_MAC_ADDRESS) {
-    Serial.println("Initializing MAC address-based faculty detection...");
-    initializeBLEScanner();
+  Serial.println("Initializing MAC address-based faculty detection...");
+  initializeBLEScanner();
 
-    // Initialize MAC detection variables
-    facultyPresent = false;
-    oldFacultyPresent = false;
-    lastMacDetectionTime = 0;
-    lastBleScanTime = 0;
-    macDetectionCount = 0;
-    macAbsenceCount = 0;
-    detectedFacultyMac = "";
-    lastDetectedMac = "";
+  // Initialize MAC detection variables
+  facultyPresent = false;
+  oldFacultyPresent = false;
+  lastMacDetectionTime = 0;
+  lastBleScanTime = 0;
+  macDetectionCount = 0;
+  macAbsenceCount = 0;
+  detectedFacultyMac = "";
+  lastDetectedMac = "";
 
-    // Publish initial status to MQTT (both standardized and legacy topics)
-    mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
-    mqttClient.publish(mqtt_topic_legacy_status, "keychain_disconnected");
-    Serial.println("MAC address detection ready, scanning for faculty devices");
-    displaySystemStatus("Scanning for faculty...");
-  } else {
-    // Legacy BLE server mode (for backward compatibility)
-    Serial.println("Using legacy BLE server mode...");
-
-    // Create the BLE Device with faculty name
-    char ble_device_name[50];
-    sprintf(ble_device_name, "ProfDeskUnit_%s", FACULTY_NAME);
-    BLEDevice::init(ble_device_name);
-    Serial.print("BLE Device initialized: ");
-    Serial.println(ble_device_name);
-
-    // Create the BLE Server
-    pServer = BLEDevice::createServer();
-    pServer->setCallbacks(new MyServerCallbacks());
-
-    // Create the BLE Service
-    BLEService *pService = pServer->createService(SERVICE_UUID);
-
-    // Create a BLE Characteristic
-    pCharacteristic = pService->createCharacteristic(
-                        CHARACTERISTIC_UUID,
-                        BLECharacteristic::PROPERTY_READ   |
-                        BLECharacteristic::PROPERTY_WRITE  |
-                        BLECharacteristic::PROPERTY_NOTIFY |
-                        BLECharacteristic::PROPERTY_INDICATE
-                      );
-
-    // Create a BLE Descriptor
-    pCharacteristic->addDescriptor(new BLE2902());
-
-    // Start the service
-    pService->start();
-
-    // Start advertising
-    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-    pAdvertising->addServiceUUID(SERVICE_UUID);
-    pAdvertising->setScanResponse(false);
-    pAdvertising->setMinPreferred(0x0);
-    BLEDevice::startAdvertising();
-
-    Serial.println("BLE Server ready!");
-    displaySystemStatus("BLE Server ready");
-
-    // Initialize connection status
-    deviceConnected = false;
-    oldDeviceConnected = false;
-    lastBleSignalTime = millis();  // Initialize the last BLE signal time
-
-    // Publish initial status to MQTT (both standardized and legacy topics)
-    mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
-    mqttClient.publish(mqtt_topic_legacy_status, "keychain_disconnected");
-    Serial.println("BLE server ready, waiting for keychain connection");
-    displaySystemStatus("Waiting for keychain...");
-  }
+  // Publish initial status to MQTT (both standardized and legacy topics)
+  mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
+  mqttClient.publish(mqtt_topic_legacy_status, "keychain_disconnected");
+  Serial.println("MAC address detection ready, scanning for faculty devices");
+  displaySystemStatus("Scanning for faculty...");
 
   // Update time display
   updateTimeDisplay();
@@ -1132,152 +1242,22 @@ void loop() {
   // Process MQTT messages
   mqttClient.loop();
 
-  // MAC Address Detection (if enabled)
-  if (BLE_DETECTION_MODE_MAC_ADDRESS) {
-    // Perform BLE scanning for faculty MAC addresses
-    performBLEScan();
-  } else {
-    // Legacy BLE connection management with improved reliability
-    // Handle BLE connection state changes
-    if (deviceConnected && !oldDeviceConnected) {
-    // Just connected
-    oldDeviceConnected = deviceConnected;
-    Serial.println("BLE client connected - updating status");
-    mqttClient.publish(mqtt_topic_status, "keychain_connected");
-    mqttClient.publish(mqtt_topic_legacy_status, "keychain_connected");
-    lastStatusUpdate = currentMillis;
-
-    // Show a notification about keychain connection using centralized UI function
-    updateUIArea(3, "Keychain connected!");
-    updateUIArea(1, "Keychain Connected");
-    delay(2000);
-
-    // If we have a last message, redisplay it, otherwise clear
-    if (lastMessage.length() > 0) {
-      displayMessage(lastMessage);
-    } else {
-      tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, tft.height() - MESSAGE_AREA_TOP - STATUS_HEIGHT, COLOR_MESSAGE_BG);
-      drawGoldAccent();
-    }
-  }
-
-  if (!deviceConnected && oldDeviceConnected) {
-    // Just disconnected
-    oldDeviceConnected = deviceConnected;
-    Serial.println("BLE client disconnected - updating status");
-
-    // Always update status when BLE disconnects
-    mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
-    mqttClient.publish(mqtt_topic_legacy_status, "keychain_disconnected");
-
-    // Show a notification about keychain disconnection using centralized UI function
-    updateUIArea(3, "Keychain disconnected!");
-    updateUIArea(1, "Keychain Disconnected");
-
-    // Use error color for the disconnection message
-    tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
-    tft.setTextSize(2);
-    tft.setTextColor(COLOR_STATUS_ERROR);
-    tft.println("Keychain Disconnected");
-    delay(2000);
-
-    // If we have a last message, redisplay it, otherwise clear
-    if (lastMessage.length() > 0) {
-      displayMessage(lastMessage);
-    } else {
-      tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, tft.height() - MESSAGE_AREA_TOP - STATUS_HEIGHT, COLOR_MESSAGE_BG);
-      drawGoldAccent();
-    }
-
-    // Restart advertising so new clients can connect
-    BLEDevice::startAdvertising();
-  }
-
-  // BLE reconnection logic - improved with better handling
-  if (!deviceConnected) {
-    // Check if we've lost connection for longer than the timeout
-    if (currentMillis - lastBleSignalTime > BLE_CONNECTION_TIMEOUT) {
-      // Only attempt reconnection if we haven't exceeded the maximum attempts
-      if (bleReconnectAttempts < BLE_RECONNECT_ATTEMPTS) {
-        Serial.print("BLE connection timed out. Attempting reconnection (");
-        Serial.print(bleReconnectAttempts + 1);
-        Serial.print(" of ");
-        Serial.print(BLE_RECONNECT_ATTEMPTS);
-        Serial.println(")");
-
-        // Restart advertising
-        BLEDevice::startAdvertising();
-
-        // Increment reconnection attempts
-        bleReconnectAttempts++;
-
-        // Update last signal time to prevent rapid reconnection attempts
-        lastBleSignalTime = currentMillis;
-
-        // Display reconnection attempt
-        displaySystemStatus("Attempting BLE reconnection...");
-      } else if (bleReconnectAttempts == BLE_RECONNECT_ATTEMPTS) {
-        // We've reached the maximum number of attempts
-        Serial.println("Maximum BLE reconnection attempts reached");
-
-        // Display status message
-        displaySystemStatus("BLE reconnection failed");
-
-        // Increment to prevent repeated messages
-        bleReconnectAttempts++;
-
-        // Reset the BLE device if we've reached max attempts
-        // This can help recover from some BLE stack issues
-        if (bleReconnectAttempts > BLE_RECONNECT_ATTEMPTS + 5) {
-          Serial.println("Resetting BLE device after multiple failed reconnection attempts");
-          BLEDevice::deinit(true);  // Full deinit
-          delay(1000);
-
-          // Reinitialize BLE
-          char ble_device_name[50];
-          sprintf(ble_device_name, "ProfDeskUnit_%s", FACULTY_NAME);
-          BLEDevice::init(ble_device_name);
-
-          // Recreate server and service
-          pServer = BLEDevice::createServer();
-          pServer->setCallbacks(new MyServerCallbacks());
-          BLEService *pService = pServer->createService(SERVICE_UUID);
-          pCharacteristic = pService->createCharacteristic(
-                            CHARACTERISTIC_UUID,
-                            BLECharacteristic::PROPERTY_READ   |
-                            BLECharacteristic::PROPERTY_WRITE  |
-                            BLECharacteristic::PROPERTY_NOTIFY |
-                            BLECharacteristic::PROPERTY_INDICATE
-                          );
-          pCharacteristic->addDescriptor(new BLE2902());
-          pService->start();
-          BLEDevice::startAdvertising();
-
-          // Reset counters
-          bleReconnectAttempts = 0;
-          lastBleSignalTime = currentMillis;
-          displaySystemStatus("BLE device reset completed");
-        }
-      }
-    }
-  } else {
-    // Reset reconnection attempts when connected
-    bleReconnectAttempts = 0;
-  }
+  // Perform BLE scanning for faculty MAC addresses
+  performBLEScan();
 
   // Periodic status updates with improved efficiency
   if (currentMillis - lastStatusUpdate > 300000) { // Every 5 minutes
     lastStatusUpdate = currentMillis;
 
-    // Determine status message based on connection state
+    // Determine status message based on faculty presence
     const char* status_message;
 
-    if (deviceConnected) {
+    if (facultyPresent) {
       status_message = "keychain_connected";
-      Serial.println("Periodic BLE connected status update sent");
+      Serial.println("Periodic faculty present status update sent");
     } else {
       status_message = "keychain_disconnected";
-      Serial.println("Periodic BLE disconnected status update sent");
+      Serial.println("Periodic faculty absent status update sent");
     }
 
     // Send to both standardized and legacy topics
@@ -1285,16 +1265,19 @@ void loop() {
     mqttClient.publish(mqtt_topic_legacy_status, status_message);
 
     // Also update the display status
-    if (deviceConnected) {
-      displaySystemStatus("BLE connected");
+    if (facultyPresent) {
+      displaySystemStatus("Faculty Present");
     } else {
-      displaySystemStatus("BLE disconnected");
+      displaySystemStatus("Faculty Absent");
     }
-  } // End of legacy BLE mode else block
+  }
 
   // Update time display every minute
   if (currentMillis - lastTimeUpdate > 60000) {
     lastTimeUpdate = currentMillis;
     updateTimeDisplay();
   }
+
+  // Check for periodic NTP time synchronization
+  checkPeriodicTimeSync();
 }

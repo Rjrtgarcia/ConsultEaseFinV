@@ -3,7 +3,7 @@ import datetime
 from ..models import Consultation, ConsultationStatus, get_db
 from ..utils.mqtt_utils import publish_consultation_request, publish_mqtt_message
 from ..utils.mqtt_topics import MQTTTopics
-from ..utils.cache_manager import get_cache_manager, invalidate_consultation_cache
+from ..utils.cache_manager import invalidate_consultation_cache
 
 # Set up logging
 logger = logging.getLogger(__name__)

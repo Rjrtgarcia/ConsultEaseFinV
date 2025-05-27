@@ -30,6 +30,8 @@ class Admin(Base):
     password_hash = Column(String, nullable=False)
     salt = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
+    force_password_change = Column(Boolean, default=False)
+    last_password_change = Column(DateTime, default=func.now())
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
@@ -73,6 +75,59 @@ class Admin(Base):
                 return False, "Password relies too heavily on common patterns that are easy to guess"
 
         return True, "Password meets strength requirements"
+
+    def needs_password_change(self):
+        """
+        Check if admin needs to change password.
+
+        Returns:
+            bool: True if password change is required, False otherwise
+        """
+        # Force password change if flag is set
+        if self.force_password_change:
+            return True
+
+        # Force password change every 90 days
+        if self.last_password_change:
+            from datetime import datetime, timedelta
+            days_since_change = (datetime.now() - self.last_password_change).days
+            return days_since_change > 90
+
+        return False
+
+    def update_password(self, new_password):
+        """
+        Update admin password and reset change flags.
+
+        Args:
+            new_password (str): New password
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Validate password strength
+            is_valid, error_message = self.validate_password_strength(new_password)
+            if not is_valid:
+                logger.error(f"Password update failed: {error_message}")
+                return False
+
+            # Hash the new password
+            password_hash, salt = self.hash_password(new_password)
+
+            # Update password fields
+            self.password_hash = password_hash
+            self.salt = salt
+            self.force_password_change = False
+            from datetime import datetime
+            self.last_password_change = datetime.now()
+
+            logger.info(f"Password updated for admin: {self.username}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error updating password for admin {self.username}: {e}")
+            return False
 
     @staticmethod
     def hash_password(password, salt=None):

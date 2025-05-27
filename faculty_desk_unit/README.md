@@ -1,12 +1,12 @@
 # ConsultEase - Faculty Desk Unit
 
-This is the firmware for the Faculty Desk Unit component of the ConsultEase system. This unit is installed at each faculty member's desk and shows consultation requests from students while automatically detecting the faculty's presence via BLE.
+This is the firmware for the Faculty Desk Unit component of the ConsultEase system. This unit is installed at each faculty member's desk and shows consultation requests from students while automatically detecting the faculty's presence via MAC address-based BLE scanning.
 
 ## Hardware Requirements
 
 - ESP32 Development Board (ESP32-WROOM-32 or similar)
 - 2.4" TFT Display (ST7789 SPI interface)
-- BLE Beacon (can be another ESP32 or dedicated BLE beacon)
+- Faculty member's BLE device (smartphone, smartwatch, or dedicated BLE beacon)
 - Power supply (USB or wall adapter)
 
 ## Pin Connections
@@ -37,6 +37,8 @@ The following libraries need to be installed via the Arduino Library Manager:
 - Adafruit_GFX
 - Adafruit_ST7789
 - time
+- WiFiUdp (built-in ESP32 library)
+- NTPClient (by Fabrice Weinberg) - **NEW: For automatic time synchronization**
 - NimBLE-Arduino (for BLE beacon)
 
 ## Setup and Configuration
@@ -47,12 +49,50 @@ The following libraries need to be installed via the Arduino Library Manager:
    - WiFi credentials (`WIFI_SSID` and `WIFI_PASSWORD`)
    - MQTT broker IP address (`MQTT_SERVER`)
    - Faculty ID and name (`FACULTY_ID` and `FACULTY_NAME`)
-   - BLE settings (including always-on option)
+   - Faculty MAC addresses in the `FACULTY_MAC_ADDRESSES` array
+   - NTP settings (optional - defaults to Philippines timezone)
 4. Compile and upload to your ESP32
+
+### NTP Time Synchronization Configuration
+
+The faculty desk unit now includes automatic internet time synchronization. Configure these settings in `config.h`:
+
+```cpp
+// NTP Time Synchronization Configuration
+#define NTP_SERVER_1 "pool.ntp.org"
+#define NTP_SERVER_2 "time.nist.gov"
+#define NTP_SERVER_3 "time.google.com"
+#define TIMEZONE_OFFSET_HOURS 8  // Philippines timezone UTC+8
+#define NTP_SYNC_INTERVAL_HOURS 1  // Sync every 1 hour
+#define NTP_RETRY_INTERVAL_MINUTES 5  // Retry every 5 minutes if failed
+#define NTP_MAX_RETRY_ATTEMPTS 3  // Maximum retry attempts before giving up
+```
+
+**Features:**
+- Automatic time synchronization on startup
+- Periodic sync every 1-2 hours to maintain accuracy
+- Multiple NTP server fallback for reliability
+- Visual indicators for sync status (green dot = synced, orange dot = fallback)
+- Graceful fallback to ESP32 internal clock if NTP fails
 
 ## Testing
 
-To test the faculty desk unit, you can use the new BLE test script:
+### NTP Time Synchronization Testing
+
+To test the NTP functionality independently:
+
+1. Upload the `test_ntp.ino` sketch to your ESP32
+2. Open the Serial Monitor at 115200 baud
+3. Observe the NTP synchronization process and results
+4. The test will verify:
+   - Primary NTP server connectivity
+   - Alternative server fallback
+   - Time formatting functions
+   - Fallback mechanisms
+
+### Full System Testing
+
+To test the complete faculty desk unit, you can use the new BLE test script:
 
 1. Make sure the central system is running
 2. Make sure the MQTT broker is running
@@ -147,11 +187,12 @@ If the faculty desk unit is not connecting to the MQTT broker:
 
 ### BLE Issues
 
-The faculty desk unit is configured to always report as connected, but if you want to connect a real BLE client:
-- Make sure the BLE client (keychain) is powered on
-- Make sure the BLE client is within range of the ESP32
-- Check the serial output for BLE-related messages
-- Note that disconnecting a real BLE client will not change the faculty status (it will remain "Available")
+The faculty desk unit uses MAC address-based detection:
+- Make sure the faculty member's BLE device (smartphone, smartwatch, etc.) is powered on
+- Make sure the device is within range of the ESP32 (adjust `BLE_RSSI_THRESHOLD` if needed)
+- Check the serial output for BLE scanning messages
+- Verify the faculty member's device MAC address is correctly added to the `FACULTY_MAC_ADDRESSES` array
+- The device will be detected even if it's not actively advertising (passive scanning)
 
 ### Display Issues
 
@@ -199,8 +240,17 @@ keychain_disconnected
 The faculty desk unit features a modern UI with the following elements:
 
 - Gold accent bar on the left side
-- Header with date and time
+- Header with synchronized date and time display
+- Time sync status indicator (green dot = NTP synced, orange dot = fallback time)
 - Message area with title and content
 - Status bar at the bottom
 - National University Philippines color scheme (blue and gold)
 - Smooth transitions between screens
+
+### Time Display Features
+
+- **Accurate Time**: Displays internet-synchronized time (Philippines timezone UTC+8)
+- **Visual Sync Status**: Small colored dot indicates synchronization status
+- **Automatic Updates**: Time display refreshes every minute
+- **Fallback Support**: Gracefully handles network issues with fallback time sources
+- **Format**: 12-hour format (HH:MM) with MM/DD/YYYY date format

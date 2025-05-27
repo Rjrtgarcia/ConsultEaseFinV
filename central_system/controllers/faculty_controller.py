@@ -1,6 +1,6 @@
 import logging
 import datetime
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 from ..models import Faculty, get_db
 from ..utils.mqtt_utils import publish_faculty_status, subscribe_to_topic, publish_mqtt_message
 from ..utils.mqtt_topics import MQTTTopics
@@ -584,6 +584,54 @@ class FacultyController:
         except Exception as e:
             logger.error(f"Error updating faculty: {str(e)}")
             return None
+
+    def update_faculty_ble_id(self, faculty_id, ble_id):
+        """
+        Update a faculty member's BLE ID (for beacon assignment).
+
+        Args:
+            faculty_id (int): Faculty ID
+            ble_id (str): New BLE ID (beacon MAC address)
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            db = get_db()
+            faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
+
+            if not faculty:
+                logger.error(f"Faculty with ID {faculty_id} not found")
+                return False
+
+            # Validate BLE ID format
+            if ble_id and not Faculty.validate_ble_id(ble_id):
+                logger.error(f"Invalid BLE ID format: {ble_id}")
+                return False
+
+            # Check if BLE ID is already in use by another faculty
+            if ble_id:
+                existing = db.query(Faculty).filter(
+                    Faculty.ble_id == ble_id,
+                    Faculty.id != faculty_id
+                ).first()
+
+                if existing:
+                    logger.error(f"BLE ID {ble_id} is already in use by faculty {existing.name}")
+                    return False
+
+            # Update BLE ID
+            faculty.ble_id = ble_id
+            faculty.updated_at = func.now()
+            db.commit()
+
+            logger.info(f"Updated BLE ID for faculty {faculty.name} (ID: {faculty_id}) to {ble_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error updating faculty BLE ID: {str(e)}")
+            db.rollback()
+            return False
 
     def delete_faculty(self, faculty_id):
         """

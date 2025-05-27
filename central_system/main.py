@@ -114,8 +114,18 @@ class ConsultEaseApp:
             logger.error(f"Failed to initialize direct keyboard integration: {e}")
             self.direct_keyboard = None
 
+        # Validate hardware before proceeding
+        logger.info("Performing hardware validation...")
+        from .utils.hardware_validator import log_hardware_status
+        hardware_status = log_hardware_status()
+
         # Initialize database
         init_db()
+
+        # Start system monitoring
+        logger.info("Starting system monitoring...")
+        from .utils.system_monitor import start_system_monitoring
+        start_system_monitoring()
 
         # Initialize async MQTT service
         logger.info("Initializing async MQTT service")
@@ -482,10 +492,18 @@ class ConsultEaseApp:
         username, password = credentials
 
         # Authenticate admin
-        admin = self.admin_controller.authenticate(username, password)
+        auth_result = self.admin_controller.authenticate(username, password)
 
-        if admin:
+        if auth_result:
+            admin = auth_result['admin']
             logger.info(f"Admin authenticated: {username}")
+
+            # Check if password change is required
+            if auth_result.get('requires_password_change', False):
+                logger.warning(f"Admin {username} requires password change")
+                self.show_password_change_dialog(admin, forced=True)
+                return
+
             # Create admin info to pass to dashboard
             admin_info = {
                 'id': admin.id,
@@ -580,6 +598,47 @@ class ConsultEaseApp:
             logger.error(f"Error refreshing student data: {str(e)}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
+
+    def show_password_change_dialog(self, admin, forced=False):
+        """
+        Show password change dialog.
+
+        Args:
+            admin: Admin object
+            forced: Whether password change is forced
+        """
+        try:
+            from .views.password_change_dialog import PasswordChangeDialog
+
+            admin_info = {
+                'id': admin.id,
+                'username': admin.username
+            }
+
+            dialog = PasswordChangeDialog(admin_info, forced_change=forced, parent=None)
+
+            def on_password_changed(success):
+                if success and forced:
+                    # If forced password change was successful, proceed to dashboard
+                    logger.info(f"Forced password change completed for admin: {admin.username}")
+                    self.show_admin_dashboard_window(admin_info)
+                elif success:
+                    logger.info(f"Password change completed for admin: {admin.username}")
+
+            dialog.password_changed.connect(on_password_changed)
+            dialog.exec_()
+
+        except Exception as e:
+            logger.error(f"Error showing password change dialog: {e}")
+            if forced:
+                # If forced password change fails, show error and exit
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.critical(
+                    None,
+                    "Critical Error",
+                    "Failed to load password change dialog. The application will exit."
+                )
+                self.quit()
 
     def handle_window_change(self, window_name, data=None):
         """

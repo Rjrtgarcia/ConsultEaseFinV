@@ -1,7 +1,8 @@
 /**
  * ConsultEase - Faculty Desk Unit Configuration
- *
- * This file contains configuration settings for the Faculty Desk Unit.
+ * Unit 2 Configuration Template
+ * 
+ * Copy this file to config.h and update with actual values
  * Update these values to match your specific setup.
  */
 
@@ -13,15 +14,15 @@
 #define WIFI_PASSWORD "Admin123"
 
 // MQTT Configuration
-#define MQTT_SERVER "172.20.10.8"  // Updated to match central system's MQTT broker IP
+#define MQTT_SERVER "172.20.10.8"  // Update with your MQTT broker IP
 #define MQTT_PORT 1883
 #define MQTT_USERNAME ""  // Leave empty if not using authentication
 #define MQTT_PASSWORD ""  // Leave empty if not using authentication
 
-// Faculty Configuration
-#define FACULTY_ID 3  // This should match the faculty ID in the database
-#define FACULTY_NAME "Jeysibn"  // This should match the faculty name in the database
-#define FACULTY_DEPARTMENT "Computer Science"  // This should match the faculty department in the database
+// Faculty Configuration - Unit 2
+#define FACULTY_ID 2  // This should match the faculty ID in the database
+#define FACULTY_NAME "Dr. Jane Doe"  // REPLACE WITH ACTUAL FACULTY NAME
+#define FACULTY_DEPARTMENT "Mathematics"  // REPLACE WITH ACTUAL DEPARTMENT
 
 // BLE Configuration - MAC Address Detection for nRF51822 Beacons
 #define BLE_SCAN_INTERVAL 3000  // Scan interval in milliseconds (optimized for nRF51822)
@@ -32,7 +33,7 @@
 // Each ESP32 unit is configured with only its assigned faculty member's beacon MAC address
 // Format: "XX:XX:XX:XX:XX:XX" (case insensitive)
 // IMPORTANT: Update this with the actual nRF51822 beacon MAC address for this specific faculty member
-#define FACULTY_BEACON_MAC "00:00:00:00:00:00"  // REPLACE WITH ACTUAL BEACON MAC ADDRESS
+#define FACULTY_BEACON_MAC "AA:BB:CC:DD:EE:02"  // REPLACE WITH ACTUAL BEACON MAC ADDRESS
 
 // MAC Address Detection Settings - Optimized for nRF51822 Beacons
 #define MAC_DETECTION_TIMEOUT 45000    // Time in ms to consider faculty absent (increased for beacon reliability)
@@ -67,15 +68,6 @@
 // Legacy MQTT Topics - For backward compatibility
 #define MQTT_LEGACY_STATUS "professor/status"
 #define MQTT_LEGACY_MESSAGES "professor/messages"
-
-// NTP Time Synchronization Configuration
-#define NTP_SERVER_1 "pool.ntp.org"
-#define NTP_SERVER_2 "time.nist.gov"
-#define NTP_SERVER_3 "time.google.com"
-#define TIMEZONE_OFFSET_HOURS 8  // Philippines timezone UTC+8
-#define NTP_SYNC_INTERVAL_HOURS 1  // Sync every 1 hour
-#define NTP_RETRY_INTERVAL_MINUTES 5  // Retry every 5 minutes if failed
-#define NTP_MAX_RETRY_ATTEMPTS 3  // Maximum retry attempts before giving up
 
 // Debug Configuration
 #define DEBUG_ENABLED true  // Set to false to disable debug output
