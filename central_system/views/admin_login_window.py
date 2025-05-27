@@ -242,20 +242,19 @@ class AdminLoginWindow(BaseWindow):
         """
         super().showEvent(event)
 
+        # Import necessary modules at the beginning
+        import logging
+        import subprocess
+        import sys
+        from PyQt5.QtWidgets import QApplication
+
         # Clear any previous inputs
         self.username_input.clear()
         self.password_input.clear()
         self.error_label.setVisible(False)
 
-        # Check for first-time setup
+        # Check for first-time setup (using QTimer from top-level imports)
         QTimer.singleShot(100, self.check_first_time_setup)
-
-        # Import necessary modules
-        import logging
-        import subprocess
-        import sys
-        from PyQt5.QtCore import QTimer
-        from PyQt5.QtWidgets import QApplication
 
         logger = logging.getLogger(__name__)
         logger.info("AdminLoginWindow shown, triggering keyboard")
