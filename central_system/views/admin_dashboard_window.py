@@ -199,6 +199,23 @@ class FacultyManagementTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.faculty_controller = FacultyController()
+
+        # Set up auto-refresh timer for real-time updates
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.timeout.connect(self.refresh_data)
+        self.refresh_timer.start(30000)  # Refresh every 30 seconds
+
+        # Track last data hash to avoid unnecessary UI updates
+        self._last_data_hash = None
+
+        # Loading state management
+        self._is_loading = False
+        self._loading_widget = None
+
+        # Error state tracking
+        self._last_error_time = None
+        self._consecutive_errors = 0
+
         self.init_ui()
 
     def init_ui(self):
@@ -211,30 +228,92 @@ class FacultyManagementTab(QWidget):
         # Main layout
         main_layout = QVBoxLayout(container)
 
-        # Buttons for actions
+        # Buttons for actions with improved touch-friendly styling
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)  # Better spacing between buttons
+
+        # Common button style for touch-friendly interface
+        button_style = """
+            QPushButton {
+                font-size: 14pt;
+                font-weight: bold;
+                padding: 12px 20px;
+                border-radius: 8px;
+                border: none;
+                min-height: 44px;
+                min-width: 120px;
+            }
+            QPushButton:hover {
+                opacity: 0.8;
+            }
+            QPushButton:pressed {
+                transform: scale(0.95);
+            }
+        """
 
         self.add_button = QPushButton("Add Faculty")
-        self.add_button.setStyleSheet("background-color: #4CAF50; color: white;")
+        self.add_button.setStyleSheet(button_style + """
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
         self.add_button.clicked.connect(self.add_faculty)
         button_layout.addWidget(self.add_button)
 
         self.edit_button = QPushButton("Edit Faculty")
+        self.edit_button.setStyleSheet(button_style + """
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
         self.edit_button.clicked.connect(self.edit_faculty)
         button_layout.addWidget(self.edit_button)
 
         self.delete_button = QPushButton("Delete Faculty")
-        self.delete_button.setStyleSheet("background-color: #F44336; color: white;")
+        self.delete_button.setStyleSheet(button_style + """
+            QPushButton {
+                background-color: #F44336;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+        """)
         self.delete_button.clicked.connect(self.delete_faculty)
         button_layout.addWidget(self.delete_button)
 
         # Add beacon management button
         self.beacon_button = QPushButton("Beacon Management")
-        self.beacon_button.setStyleSheet("background-color: #2196F3; color: white;")
+        self.beacon_button.setStyleSheet(button_style + """
+            QPushButton {
+                background-color: #FF9800;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #F57C00;
+            }
+        """)
         self.beacon_button.clicked.connect(self.open_beacon_management)
         button_layout.addWidget(self.beacon_button)
 
         self.refresh_button = QPushButton("Refresh")
+        self.refresh_button.setStyleSheet(button_style + """
+            QPushButton {
+                background-color: #9E9E9E;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #757575;
+            }
+        """)
         self.refresh_button.clicked.connect(self.refresh_data)
         button_layout.addWidget(self.refresh_button)
 
@@ -242,7 +321,7 @@ class FacultyManagementTab(QWidget):
 
         main_layout.addLayout(button_layout)
 
-        # Faculty table
+        # Faculty table with improved touch-friendly styling
         self.faculty_table = QTableWidget()
         self.faculty_table.setColumnCount(7)
         self.faculty_table.setHorizontalHeaderLabels(["ID", "Name", "Department", "Email", "BLE ID", "Status", "Always Available"])
@@ -250,6 +329,41 @@ class FacultyManagementTab(QWidget):
         self.faculty_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.faculty_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.faculty_table.setSelectionMode(QTableWidget.SingleSelection)
+
+        # Improve table styling for touch interface
+        self.faculty_table.setStyleSheet("""
+            QTableWidget {
+                gridline-color: #ddd;
+                background-color: white;
+                alternate-background-color: #f9f9f9;
+                selection-background-color: #3498db;
+                font-size: 12pt;
+            }
+            QTableWidget::item {
+                padding: 12px 8px;
+                border-bottom: 1px solid #eee;
+                min-height: 40px;
+            }
+            QTableWidget::item:selected {
+                background-color: #3498db;
+                color: white;
+            }
+            QHeaderView::section {
+                background-color: #34495e;
+                color: white;
+                padding: 12px 8px;
+                border: none;
+                font-weight: bold;
+                font-size: 12pt;
+                min-height: 44px;
+            }
+            QHeaderView::section:hover {
+                background-color: #2c3e50;
+            }
+        """)
+
+        # Enable alternating row colors for better readability
+        self.faculty_table.setAlternatingRowColors(True)
 
         main_layout.addWidget(self.faculty_table)
 
@@ -303,14 +417,41 @@ class FacultyManagementTab(QWidget):
 
     def refresh_data(self):
         """
-        Refresh the faculty data in the table.
+        Refresh the faculty data in the table with optimized updates.
+        Only updates the UI if data has actually changed.
         """
-        # Clear the table
-        self.faculty_table.setRowCount(0)
-
         try:
+            # Show loading indicator for initial load
+            if self._last_data_hash is None:
+                self._show_loading_indicator()
+
             # Get all faculty from the controller
             faculties = self.faculty_controller.get_all_faculty()
+
+            # Reset error tracking on successful data fetch
+            self._consecutive_errors = 0
+            self._last_error_time = None
+
+            # Create a hash of the current data to check for changes
+            import hashlib
+            faculty_data_str = str([(f.id, f.name, f.department, f.email, f.ble_id, f.status, f.always_available) for f in faculties])
+            current_hash = hashlib.md5(faculty_data_str.encode()).hexdigest()
+
+            # Only update UI if data has changed
+            if current_hash == self._last_data_hash:
+                self._hide_loading_indicator()
+                return
+
+            self._last_data_hash = current_hash
+
+            # Hide loading indicator before updating table
+            self._hide_loading_indicator()
+
+            # Temporarily disable updates for better performance
+            self.faculty_table.setUpdatesEnabled(False)
+
+            # Clear the table
+            self.faculty_table.setRowCount(0)
 
             for faculty in faculties:
                 row_position = self.faculty_table.rowCount()
@@ -321,7 +462,7 @@ class FacultyManagementTab(QWidget):
                 self.faculty_table.setItem(row_position, 1, QTableWidgetItem(faculty.name))
                 self.faculty_table.setItem(row_position, 2, QTableWidgetItem(faculty.department))
                 self.faculty_table.setItem(row_position, 3, QTableWidgetItem(faculty.email))
-                self.faculty_table.setItem(row_position, 4, QTableWidgetItem(faculty.ble_id))
+                self.faculty_table.setItem(row_position, 4, QTableWidgetItem(faculty.ble_id or ""))
 
                 status_item = QTableWidgetItem("Available" if faculty.status else "Unavailable")
                 if faculty.status:
@@ -336,9 +477,152 @@ class FacultyManagementTab(QWidget):
                     always_available_item.setBackground(Qt.green)
                 self.faculty_table.setItem(row_position, 6, always_available_item)
 
+            # Re-enable updates
+            self.faculty_table.setUpdatesEnabled(True)
+
+            # Show empty state message if no faculty
+            if len(faculties) == 0:
+                self._show_empty_faculty_table_message()
+
+            logger.debug(f"Faculty table refreshed with {len(faculties)} entries")
+
         except Exception as e:
             logger.error(f"Error refreshing faculty data: {str(e)}")
-            QMessageBox.warning(self, "Data Error", f"Failed to refresh faculty data: {str(e)}")
+
+            # Hide loading indicator on error
+            self._hide_loading_indicator()
+
+            # Track consecutive errors
+            import time
+            self._consecutive_errors += 1
+            self._last_error_time = time.time()
+
+            # Show error in table if this is a persistent issue
+            if self._consecutive_errors >= 3:
+                self._show_error_in_table(f"Error loading faculty data: {str(e)}")
+
+            # Only show warning for serious errors, not during normal auto-refresh
+            if self._consecutive_errors == 1:  # Only show on first error
+                if "Connection refused" in str(e) or "Database error" in str(e):
+                    QMessageBox.warning(self, "Data Error", f"Failed to refresh faculty data: {str(e)}")
+
+            # Slow down refresh rate if we're having persistent errors
+            if self._consecutive_errors >= 5:
+                self.refresh_timer.setInterval(60000)  # Slow down to 1 minute
+                logger.warning("Slowing down refresh rate due to persistent errors")
+
+    def _show_empty_faculty_table_message(self):
+        """
+        Show a message in the table when no faculty members exist.
+        """
+        # Add a single row with a message spanning all columns
+        self.faculty_table.insertRow(0)
+
+        # Create a message item
+        message_item = QTableWidgetItem("No faculty members found. Click 'Add Faculty' to add the first faculty member.")
+        message_item.setTextAlignment(Qt.AlignCenter)
+        message_item.setFlags(Qt.ItemIsEnabled)  # Make it non-selectable
+
+        # Style the message
+        from PyQt5.QtGui import QFont, QColor
+        font = QFont()
+        font.setItalic(True)
+        font.setPointSize(14)
+        message_item.setFont(font)
+        message_item.setForeground(QColor("#666"))
+
+        # Set the item in the first column and span all columns
+        self.faculty_table.setItem(0, 0, message_item)
+        self.faculty_table.setSpan(0, 0, 1, 7)  # Span all 7 columns
+
+    def _show_loading_indicator(self):
+        """
+        Show a loading indicator in the faculty table.
+        """
+        if self._is_loading:
+            return  # Already showing loading indicator
+
+        self._is_loading = True
+        logger.debug("Showing loading indicator in faculty table")
+
+        # Clear table first
+        self.faculty_table.setRowCount(0)
+
+        # Add loading row
+        self.faculty_table.insertRow(0)
+
+        # Create loading message
+        loading_item = QTableWidgetItem("Loading faculty data...")
+        loading_item.setTextAlignment(Qt.AlignCenter)
+        loading_item.setFlags(Qt.ItemIsEnabled)  # Make it non-selectable
+
+        # Style the loading message
+        from PyQt5.QtGui import QFont, QColor
+        font = QFont()
+        font.setItalic(True)
+        font.setPointSize(12)
+        loading_item.setFont(font)
+        loading_item.setForeground(QColor("#3498db"))
+
+        # Set the item and span all columns
+        self.faculty_table.setItem(0, 0, loading_item)
+        self.faculty_table.setSpan(0, 0, 1, 7)
+
+    def _hide_loading_indicator(self):
+        """
+        Hide the loading indicator.
+        """
+        if not self._is_loading:
+            return
+
+        logger.debug("Hiding loading indicator")
+        self._is_loading = False
+        # The table will be populated with actual data after this
+
+    def _show_error_in_table(self, error_message):
+        """
+        Show an error message in the faculty table.
+
+        Args:
+            error_message (str): Error message to display
+        """
+        logger.info(f"Showing error in faculty table: {error_message}")
+
+        # Clear table first
+        self.faculty_table.setRowCount(0)
+
+        # Add error row
+        self.faculty_table.insertRow(0)
+
+        # Create error message
+        error_item = QTableWidgetItem(f"⚠️ {error_message}")
+        error_item.setTextAlignment(Qt.AlignCenter)
+        error_item.setFlags(Qt.ItemIsEnabled)  # Make it non-selectable
+
+        # Style the error message
+        from PyQt5.QtGui import QFont, QColor
+        font = QFont()
+        font.setBold(True)
+        font.setPointSize(12)
+        error_item.setFont(font)
+        error_item.setForeground(QColor("#e74c3c"))
+
+        # Set the item and span all columns
+        self.faculty_table.setItem(0, 0, error_item)
+        self.faculty_table.setSpan(0, 0, 1, 7)
+
+    def handle_faculty_updated(self):
+        """
+        Handle faculty data updated event from main application.
+        This ensures real-time synchronization between admin and student dashboards.
+        """
+        logger.info("Admin dashboard received faculty update notification")
+        try:
+            # Force immediate refresh of faculty data
+            self.refresh_data()
+            logger.debug("Admin dashboard faculty data refreshed successfully")
+        except Exception as e:
+            logger.error(f"Error handling faculty update in admin dashboard: {e}")
 
     def add_faculty(self):
         """
@@ -412,14 +696,21 @@ class FacultyManagementTab(QWidget):
                 always_available = sanitize_boolean(dialog.always_available_checkbox.isChecked())
 
                 # Add faculty using controller
-                faculty = self.faculty_controller.add_faculty(name, department, email, ble_id, image_path, always_available)
+                faculty, errors = self.faculty_controller.add_faculty(name, department, email, ble_id, image_path, always_available)
 
-                if faculty:
+                if faculty and not errors:
                     QMessageBox.information(self, "Add Faculty", f"Faculty '{name}' added successfully.")
+                    # Force immediate refresh to show changes
+                    self._last_data_hash = None  # Force refresh
                     self.refresh_data()
                     self.faculty_updated.emit()
                 else:
-                    QMessageBox.warning(self, "Add Faculty", "Failed to add faculty. This email or BLE ID may already be in use.")
+                    error_msg = "Failed to add faculty."
+                    if errors:
+                        error_msg += f" Errors: {'; '.join(errors)}"
+                    else:
+                        error_msg += " This email or BLE ID may already be in use."
+                    QMessageBox.warning(self, "Add Faculty", error_msg)
 
             except ValueError as e:
                 logger.error(f"Validation error adding faculty: {str(e)}")
@@ -509,6 +800,8 @@ class FacultyManagementTab(QWidget):
 
                 if updated_faculty:
                     QMessageBox.information(self, "Edit Faculty", f"Faculty '{name}' updated successfully.")
+                    # Force immediate refresh to show changes
+                    self._last_data_hash = None  # Force refresh
                     self.refresh_data()
                     self.faculty_updated.emit()
                 else:
@@ -549,6 +842,8 @@ class FacultyManagementTab(QWidget):
 
                 if success:
                     QMessageBox.information(self, "Delete Faculty", f"Faculty '{faculty_name}' deleted successfully.")
+                    # Force immediate refresh to show changes
+                    self._last_data_hash = None  # Force refresh
                     self.refresh_data()
                     self.faculty_updated.emit()
                 else:

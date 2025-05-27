@@ -500,6 +500,10 @@ class FacultyController:
             invalidate_faculty_cache()
             invalidate_cache_pattern("get_all_faculty")
 
+            # Clear method-level cache if it exists
+            if hasattr(self.get_all_faculty, 'cache_clear'):
+                self.get_all_faculty.cache_clear()
+
             # Publish a notification about the new faculty
             logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) created with BLE-based availability")
             try:
@@ -580,6 +584,14 @@ class FacultyController:
 
             logger.info(f"Updated faculty: {faculty.name} (ID: {faculty.id})")
 
+            # Invalidate faculty cache
+            invalidate_faculty_cache()
+            invalidate_cache_pattern("get_all_faculty")
+
+            # Clear method-level cache if it exists
+            if hasattr(self.get_all_faculty, 'cache_clear'):
+                self.get_all_faculty.cache_clear()
+
             return faculty
         except Exception as e:
             logger.error(f"Error updating faculty: {str(e)}")
@@ -655,6 +667,14 @@ class FacultyController:
             db.commit()
 
             logger.info(f"Deleted faculty: {faculty.name} (ID: {faculty.id})")
+
+            # Invalidate faculty cache
+            invalidate_faculty_cache()
+            invalidate_cache_pattern("get_all_faculty")
+
+            # Clear method-level cache if it exists
+            if hasattr(self.get_all_faculty, 'cache_clear'):
+                self.get_all_faculty.cache_clear()
 
             return True
         except Exception as e:

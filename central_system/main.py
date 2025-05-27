@@ -757,12 +757,39 @@ class ConsultEaseApp:
 
     def handle_faculty_updated(self):
         """
-        Handle faculty data updated event.
+        Handle faculty data updated event with enhanced cross-dashboard synchronization.
         """
-        # Refresh faculty grid if dashboard is active
+        logger.info("Faculty data updated - refreshing all active dashboards")
+
+        # Refresh student dashboard if active
         if self.dashboard_window and self.dashboard_window.isVisible():
-            faculties = self.faculty_controller.get_all_faculty()
-            self.dashboard_window.populate_faculty_grid(faculties)
+            try:
+                faculties = self.faculty_controller.get_all_faculty()
+                logger.info(f"Refreshing student dashboard with {len(faculties)} faculty members")
+                self.dashboard_window.populate_faculty_grid(faculties)
+
+                # Also update the consultation panel's faculty options
+                if hasattr(self.dashboard_window, 'consultation_panel'):
+                    self.dashboard_window.consultation_panel.set_faculty_options(faculties)
+
+            except Exception as e:
+                logger.error(f"Error refreshing student dashboard: {e}")
+
+        # Refresh admin dashboard if it's open
+        if hasattr(self, 'admin_dashboard_window') and self.admin_dashboard_window and self.admin_dashboard_window.isVisible():
+            try:
+                logger.info("Refreshing admin dashboard faculty table")
+                self.admin_dashboard_window.refresh_data()
+            except Exception as e:
+                logger.error(f"Error refreshing admin dashboard: {e}")
+
+        # Trigger immediate refresh of faculty status for real-time updates
+        if hasattr(self, 'faculty_controller'):
+            try:
+                # Force cache refresh for immediate updates
+                self.faculty_controller.get_all_faculty.cache_clear()
+            except Exception as e:
+                logger.debug(f"Cache clear not available: {e}")
 
     def handle_student_updated(self):
         """

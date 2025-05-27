@@ -500,47 +500,8 @@ def init_db():
         # Check if faculty table is empty
         faculty_count = db.query(Faculty).count()
         if faculty_count == 0:
-            # Create sample faculty for nRF51822 beacon integration
-            # Note: BLE IDs will be updated with actual beacon MAC addresses during configuration
-            sample_faculty = [
-                Faculty(
-                    name="Dr. John Smith",
-                    department="Computer Science",
-                    email="john.smith@university.edu",
-                    ble_id="00:00:00:00:00:01",  # Placeholder - will be updated with actual beacon MAC
-                    status=False  # Will be updated by beacon detection
-                ),
-                Faculty(
-                    name="Dr. Jane Doe",
-                    department="Mathematics",
-                    email="jane.doe@university.edu",
-                    ble_id="00:00:00:00:00:02",  # Placeholder - will be updated with actual beacon MAC
-                    status=False  # Will be updated by beacon detection
-                ),
-                Faculty(
-                    name="Prof. Robert Chen",
-                    department="Computer Science",
-                    email="robert.chen@university.edu",
-                    ble_id="00:00:00:00:00:03",  # Placeholder - will be updated with actual beacon MAC
-                    status=False  # Will be updated by beacon detection
-                ),
-                Faculty(
-                    name="Jeysibn",
-                    department="Computer Science",
-                    email="jeysibn@university.edu",
-                    ble_id="00:00:00:00:00:04",  # Placeholder - will be updated with actual beacon MAC
-                    status=False  # Will be updated by beacon detection
-                ),
-                Faculty(
-                    name="Dr. Maria Santos",
-                    department="Information Technology",
-                    email="maria.santos@university.edu",
-                    ble_id="00:00:00:00:00:05",  # Placeholder - will be updated with actual beacon MAC
-                    status=False  # Will be updated by beacon detection
-                )
-            ]
-            db.add_all(sample_faculty)
-            logger.info("✅ Created sample faculty data")
+            logger.info("📋 Faculty table is empty - ready for admin to add faculty members")
+            logger.info("🎯 Use the admin dashboard to add faculty members with their BLE beacon IDs")
 
         # Check if student table is empty
         student_count = db.query(Student).count()

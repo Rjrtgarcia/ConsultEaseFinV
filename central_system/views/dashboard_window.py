@@ -236,6 +236,10 @@ class DashboardWindow(BaseWindow):
         # Track faculty data for efficient comparison
         self._last_faculty_hash = None
 
+        # Loading state management
+        self._is_loading = False
+        self._loading_widget = None
+
         # Log student info for debugging
         if student:
             logger.info(f"Dashboard initialized with student: ID={student.id}, Name={student.name}, RFID={student.rfid_uid}")
@@ -249,14 +253,29 @@ class DashboardWindow(BaseWindow):
         # Main layout with splitter
         main_layout = QVBoxLayout()
 
-        # Header with welcome message and student info
+        # Header with welcome message and student info - improved styling
         header_layout = QHBoxLayout()
+        header_layout.setSpacing(15)
+        header_layout.setContentsMargins(20, 15, 20, 15)
 
         if self.student:
             welcome_label = QLabel(f"Welcome, {self.student.name}")
         else:
             welcome_label = QLabel("Welcome to ConsultEase")
-        welcome_label.setStyleSheet("font-size: 24pt; font-weight: bold;")
+
+        # Enhanced header styling for consistency with admin dashboard
+        welcome_label.setStyleSheet("""
+            QLabel {
+                font-size: 28pt;
+                font-weight: bold;
+                color: #2c3e50;
+                padding: 15px 20px;
+                background-color: #ecf0f1;
+                border-radius: 10px;
+                margin: 10px 0;
+                min-height: 60px;
+            }
+        """)
         header_layout.addWidget(welcome_label)
 
         # Logout button - smaller size as per user preference
@@ -328,8 +347,13 @@ class DashboardWindow(BaseWindow):
         self.search_input.setStyleSheet("""
             QLineEdit {
                 border: none;
-                padding: 5px;
-                font-size: 12pt;
+                padding: 12px 8px;
+                font-size: 14pt;
+                min-height: 44px;
+                background-color: transparent;
+            }
+            QLineEdit:focus {
+                background-color: #f8f9fa;
             }
         """)
         self.search_input.textChanged.connect(self.filter_faculty)
@@ -362,11 +386,21 @@ class DashboardWindow(BaseWindow):
         self.filter_combo.setStyleSheet("""
             QComboBox {
                 border: none;
-                padding: 5px;
-                font-size: 12pt;
+                padding: 12px 8px;
+                font-size: 14pt;
+                min-height: 44px;
+                background-color: transparent;
+            }
+            QComboBox:focus {
+                background-color: #f8f9fa;
             }
             QComboBox::drop-down {
-                width: 20px;
+                width: 30px;
+                border: none;
+            }
+            QComboBox::down-arrow {
+                width: 12px;
+                height: 12px;
             }
         """)
         self.filter_combo.currentIndexChanged.connect(self.filter_faculty)
@@ -463,12 +497,24 @@ class DashboardWindow(BaseWindow):
         Args:
             faculties (list): List of faculty objects
         """
+        # Log faculty data for debugging
+        logger.info(f"Populating faculty grid with {len(faculties) if faculties else 0} faculty members")
+        if faculties:
+            for faculty in faculties:
+                logger.debug(f"Faculty: {faculty.name}, Status: {faculty.status}, Always Available: {getattr(faculty, 'always_available', False)}")
+
         # Temporarily disable updates to reduce flickering and improve performance
         self.setUpdatesEnabled(False)
 
         try:
             # Clear existing grid efficiently using pooled cards
             self._clear_faculty_grid_pooled()
+
+            # Handle empty faculty list
+            if not faculties:
+                logger.info("No faculty members found - showing empty state message")
+                self._show_empty_faculty_message()
+                return
 
             # Calculate optimal number of columns based on screen width
             screen_width = QApplication.desktop().screenGeometry().width()
@@ -500,43 +546,56 @@ class DashboardWindow(BaseWindow):
             # Create all widgets first before adding to layout (batch processing)
             containers = []
 
+            logger.info(f"Creating faculty cards for {len(faculties)} faculty members")
+
             for faculty in faculties:
-                # Create a container widget to center the card
-                container = QWidget()
-                container.setStyleSheet("background-color: transparent;")
-                container_layout = QHBoxLayout(container)
-                container_layout.setContentsMargins(0, 0, 0, 0)
-                container_layout.setAlignment(Qt.AlignCenter)
+                try:
+                    # Create a container widget to center the card
+                    container = QWidget()
+                    container.setStyleSheet("background-color: transparent;")
+                    container_layout = QHBoxLayout(container)
+                    container_layout.setContentsMargins(0, 0, 0, 0)
+                    container_layout.setAlignment(Qt.AlignCenter)
 
-                # Convert faculty object to dictionary format expected by FacultyCard
-                faculty_data = {
-                    'id': faculty.id,
-                    'name': faculty.name,
-                    'department': faculty.department,
-                    'available': faculty.status,
-                    'email': getattr(faculty, 'email', ''),
-                    'room': getattr(faculty, 'room', None)
-                }
+                    # Convert faculty object to dictionary format expected by FacultyCard
+                    faculty_data = {
+                        'id': faculty.id,
+                        'name': faculty.name,
+                        'department': faculty.department,
+                        'available': faculty.status or getattr(faculty, 'always_available', False),  # Show if available OR always available
+                        'status': 'Available' if (faculty.status or getattr(faculty, 'always_available', False)) else 'Unavailable',
+                        'email': getattr(faculty, 'email', ''),
+                        'room': getattr(faculty, 'room', None)
+                    }
 
-                # Get pooled faculty card
-                card = self.faculty_card_manager.get_faculty_card(
-                    faculty_data,
-                    consultation_callback=lambda fid, f=faculty: self.show_consultation_form(f)
-                )
+                    logger.debug(f"Creating card for faculty {faculty.name}: available={faculty_data['available']}, status={faculty_data['status']}")
 
-                # Connect consultation signal
-                card.consultation_requested.connect(lambda fid, f=faculty: self.show_consultation_form(f))
+                    # Get pooled faculty card
+                    card = self.faculty_card_manager.get_faculty_card(
+                        faculty_data,
+                        consultation_callback=lambda f=faculty: self.show_consultation_form(f)
+                    )
 
-                # Add card to container
-                container_layout.addWidget(card)
+                    # Connect consultation signal if it exists
+                    if hasattr(card, 'consultation_requested'):
+                        card.consultation_requested.connect(lambda f=faculty: self.show_consultation_form(f))
 
-                # Store container for batch processing
-                containers.append((container, row, col))
+                    # Add card to container
+                    container_layout.addWidget(card)
 
-                col += 1
-                if col >= max_cols:
-                    col = 0
-                    row += 1
+                    # Store container for batch processing
+                    containers.append((container, row, col))
+
+                    col += 1
+                    if col >= max_cols:
+                        col = 0
+                        row += 1
+
+                    logger.debug(f"Successfully created card for faculty {faculty.name}")
+
+                except Exception as e:
+                    logger.error(f"Error creating faculty card for {faculty.name}: {e}")
+                    continue
 
             # Now add all containers to the grid at once
             for container, r, c in containers:
@@ -558,6 +617,187 @@ class DashboardWindow(BaseWindow):
         finally:
             # Re-enable updates after all changes are made
             self.setUpdatesEnabled(True)
+
+    def _show_empty_faculty_message(self):
+        """
+        Show a message when no faculty members are available.
+        """
+        logger.info("Showing empty faculty message")
+
+        # Create a message widget
+        message_widget = QWidget()
+        message_widget.setMinimumHeight(300)  # Ensure it's visible
+        message_layout = QVBoxLayout(message_widget)
+        message_layout.setAlignment(Qt.AlignCenter)
+        message_layout.setSpacing(20)
+
+        # Title
+        title_label = QLabel("No Faculty Members Available")
+        title_label.setObjectName("empty_state_title")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setStyleSheet("""
+            QLabel#empty_state_title {
+                font-size: 28px;
+                font-weight: bold;
+                color: #2c3e50;
+                margin: 20px;
+                padding: 20px;
+            }
+        """)
+        message_layout.addWidget(title_label)
+
+        # Description
+        desc_label = QLabel("Faculty members need to be added through the admin dashboard.\nOnce added, they will appear here when available for consultation.\n\nPlease contact your administrator to add faculty members.")
+        desc_label.setObjectName("empty_state_desc")
+        desc_label.setAlignment(Qt.AlignCenter)
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet("""
+            QLabel#empty_state_desc {
+                font-size: 18px;
+                color: #7f8c8d;
+                margin: 10px 20px;
+                padding: 20px;
+                line-height: 1.6;
+                background-color: #f8f9fa;
+                border-radius: 10px;
+                border: 2px solid #e9ecef;
+            }
+        """)
+        message_layout.addWidget(desc_label)
+
+        # Add some spacing
+        message_layout.addStretch()
+
+        # Add the message widget to the grid - span all columns
+        self.faculty_grid.addWidget(message_widget, 0, 0, 1, self.faculty_grid.columnCount() if self.faculty_grid.columnCount() > 0 else 1)
+
+    def _show_loading_indicator(self):
+        """
+        Show a loading indicator while faculty data is being fetched.
+        """
+        if self._is_loading:
+            return  # Already showing loading indicator
+
+        self._is_loading = True
+        logger.debug("Showing loading indicator")
+
+        # Create loading widget
+        loading_widget = QWidget()
+        loading_widget.setMinimumHeight(200)
+        loading_layout = QVBoxLayout(loading_widget)
+        loading_layout.setAlignment(Qt.AlignCenter)
+        loading_layout.setSpacing(15)
+
+        # Loading animation (simple text-based)
+        loading_label = QLabel("Loading Faculty Information...")
+        loading_label.setAlignment(Qt.AlignCenter)
+        loading_label.setStyleSheet("""
+            QLabel {
+                font-size: 20px;
+                font-weight: bold;
+                color: #3498db;
+                padding: 20px;
+            }
+        """)
+        loading_layout.addWidget(loading_label)
+
+        # Progress indicator
+        progress_label = QLabel("Please wait while we fetch the latest faculty data...")
+        progress_label.setAlignment(Qt.AlignCenter)
+        progress_label.setWordWrap(True)
+        progress_label.setStyleSheet("""
+            QLabel {
+                font-size: 14px;
+                color: #7f8c8d;
+                padding: 10px;
+            }
+        """)
+        loading_layout.addWidget(progress_label)
+
+        # Store reference and add to grid
+        self._loading_widget = loading_widget
+        self.faculty_grid.addWidget(loading_widget, 0, 0, 1, 1)
+
+    def _hide_loading_indicator(self):
+        """
+        Hide the loading indicator.
+        """
+        if not self._is_loading or not self._loading_widget:
+            return
+
+        logger.debug("Hiding loading indicator")
+
+        # Remove loading widget from grid
+        self.faculty_grid.removeWidget(self._loading_widget)
+        self._loading_widget.deleteLater()
+        self._loading_widget = None
+        self._is_loading = False
+
+    def _show_error_message(self, error_text):
+        """
+        Show an error message in the faculty grid.
+
+        Args:
+            error_text (str): Error message to display
+        """
+        logger.info(f"Showing error message: {error_text}")
+
+        # Clear existing grid first
+        self._clear_faculty_grid_pooled()
+
+        # Create error widget
+        error_widget = QWidget()
+        error_widget.setMinimumHeight(250)
+        error_layout = QVBoxLayout(error_widget)
+        error_layout.setAlignment(Qt.AlignCenter)
+        error_layout.setSpacing(15)
+
+        # Error title
+        error_title = QLabel("⚠️ Error Loading Faculty Data")
+        error_title.setAlignment(Qt.AlignCenter)
+        error_title.setStyleSheet("""
+            QLabel {
+                font-size: 24px;
+                font-weight: bold;
+                color: #e74c3c;
+                padding: 15px;
+            }
+        """)
+        error_layout.addWidget(error_title)
+
+        # Error message
+        error_message = QLabel(error_text)
+        error_message.setAlignment(Qt.AlignCenter)
+        error_message.setWordWrap(True)
+        error_message.setStyleSheet("""
+            QLabel {
+                font-size: 14px;
+                color: #7f8c8d;
+                padding: 10px 20px;
+                background-color: #fdf2f2;
+                border: 2px solid #f5c6cb;
+                border-radius: 8px;
+                margin: 10px;
+            }
+        """)
+        error_layout.addWidget(error_message)
+
+        # Retry instruction
+        retry_label = QLabel("The system will automatically retry in a few moments.\nIf the problem persists, please contact your administrator.")
+        retry_label.setAlignment(Qt.AlignCenter)
+        retry_label.setWordWrap(True)
+        retry_label.setStyleSheet("""
+            QLabel {
+                font-size: 12px;
+                color: #95a5a6;
+                padding: 10px;
+                font-style: italic;
+            }
+        """)
+        error_layout.addWidget(retry_label)
+
+        # Add to grid
+        self.faculty_grid.addWidget(error_widget, 0, 0, 1, 1)
 
     def filter_faculty(self):
         """
@@ -625,6 +865,10 @@ class DashboardWindow(BaseWindow):
             if hasattr(self, 'faculty_scroll') and self.faculty_scroll:
                 current_scroll_position = self.faculty_scroll.verticalScrollBar().value()
 
+            # Show loading indicator for initial load or significant delays
+            if not hasattr(self, '_last_faculty_hash') or self._last_faculty_hash is None:
+                self._show_loading_indicator()
+
             # Import faculty controller
             from ..controllers import FacultyController
 
@@ -658,6 +902,9 @@ class DashboardWindow(BaseWindow):
             # Store the new faculty data hash
             self._last_faculty_hash = faculty_hash
 
+            # Hide loading indicator before updating grid
+            self._hide_loading_indicator()
+
             # Update the grid only if there are changes or this is the first load
             self.populate_faculty_grid(faculties)
 
@@ -682,12 +929,20 @@ class DashboardWindow(BaseWindow):
             import logging
             logger = logging.getLogger(__name__)
             logger.error(f"Error refreshing faculty status: {str(e)}")
+
+            # Hide loading indicator on error
+            self._hide_loading_indicator()
+
+            # Show error message in faculty grid
+            self._show_error_message(f"Error loading faculty data: {str(e)}")
+
             # Only show notification for serious errors, not for every refresh issue
             if "Connection refused" in str(e) or "Database error" in str(e):
                 self.show_notification("Error refreshing faculty status", "error")
 
             # Reset consecutive no-change counter on errors to ensure we don't slow down too much
-            self._consecutive_no_changes = 0
+            if hasattr(self, '_consecutive_no_changes'):
+                self._consecutive_no_changes = 0
 
     def _extract_faculty_data(self, faculties):
         """
