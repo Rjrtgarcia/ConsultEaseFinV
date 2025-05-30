@@ -24,7 +24,8 @@ from central_system.controllers import (
     RFIDController,
     FacultyController,
     ConsultationController,
-    AdminController
+    AdminController,
+    FacultyResponseController
 )
 
 # Import async MQTT service
@@ -149,6 +150,7 @@ class ConsultEaseApp:
         self.faculty_controller = FacultyController()
         self.consultation_controller = ConsultationController()
         self.admin_controller = AdminController()
+        self.faculty_response_controller = FacultyResponseController()
 
         # Ensure default admin exists
         self.admin_controller.ensure_default_admin()
@@ -169,6 +171,9 @@ class ConsultEaseApp:
 
         logger.info("Starting consultation controller")
         self.consultation_controller.start()
+
+        logger.info("Starting faculty response controller")
+        self.faculty_response_controller.start()
 
         # Make sure at least one faculty is available for testing
         self._ensure_dr_john_smith_available()
@@ -632,9 +637,40 @@ class ConsultEaseApp:
                 self.dashboard_window.consultation_panel.set_student(student)
                 self.dashboard_window.consultation_panel.refresh_history()
 
-        # Populate faculty grid
-        faculties = self.faculty_controller.get_all_faculty()
-        self.dashboard_window.populate_faculty_grid(faculties)
+        # Populate faculty grid with fresh data
+        try:
+            # Force fresh data retrieval to avoid DetachedInstanceError
+            faculties = self.faculty_controller.get_all_faculty()
+            logger.info(f"Retrieved {len(faculties)} faculty members for dashboard")
+
+            # Convert to safe data format to avoid session issues
+            safe_faculty_data = []
+            for faculty in faculties:
+                try:
+                    # Access all attributes while session is active
+                    faculty_data = {
+                        'id': faculty.id,
+                        'name': faculty.name,
+                        'department': faculty.department,
+                        'status': faculty.status,
+                        'always_available': getattr(faculty, 'always_available', False),
+                        'email': getattr(faculty, 'email', ''),
+                        'room': getattr(faculty, 'room', None),
+                        'ble_id': getattr(faculty, 'ble_id', ''),
+                        'last_seen': faculty.last_seen
+                    }
+                    safe_faculty_data.append(faculty_data)
+                except Exception as attr_error:
+                    logger.warning(f"Error accessing faculty {faculty.id} attributes: {attr_error}")
+                    continue
+
+            # Pass safe data to dashboard
+            self.dashboard_window.populate_faculty_grid_safe(safe_faculty_data)
+
+        except Exception as e:
+            logger.error(f"Error retrieving faculty data for dashboard: {e}")
+            # Show empty grid if there's an error
+            self.dashboard_window.populate_faculty_grid_safe([])
 
         # Determine which window is currently visible
         current_window = None

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text
 from sqlalchemy.sql import func
 from .base import Base
 import os
@@ -23,6 +23,8 @@ class Faculty(Base):
     status = Column(Boolean, default=False)  # False = Unavailable, True = Available
     always_available = Column(Boolean, default=False)  # If True, faculty is always shown as available
     last_seen = Column(DateTime, default=func.now())
+    ntp_sync_status = Column(String, default='PENDING')  # NTP sync status from desk unit
+    grace_period_active = Column(Boolean, default=False)  # Whether grace period is active
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
@@ -43,6 +45,8 @@ class Faculty(Base):
             "status": self.status,
             "always_available": self.always_available,
             "last_seen": self.last_seen.isoformat() if self.last_seen else None,
+            "ntp_sync_status": self.ntp_sync_status,
+            "grace_period_active": self.grace_period_active,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }

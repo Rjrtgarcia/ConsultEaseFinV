@@ -489,6 +489,150 @@ class DashboardWindow(BaseWindow):
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
 
+    def populate_faculty_grid_safe(self, faculty_data_list):
+        """
+        Populate the faculty grid with safe faculty data (no SQLAlchemy objects).
+        This method avoids DetachedInstanceError by working with plain dictionaries.
+
+        Args:
+            faculty_data_list (list): List of faculty data dictionaries
+        """
+        # Log faculty data for debugging
+        logger.info(f"Populating faculty grid with {len(faculty_data_list) if faculty_data_list else 0} faculty members (safe mode)")
+
+        # Temporarily disable updates to reduce flickering and improve performance
+        self.setUpdatesEnabled(False)
+
+        try:
+            # Clear existing grid efficiently using pooled cards
+            self._clear_faculty_grid_pooled()
+
+            # Handle empty faculty list
+            if not faculty_data_list:
+                logger.info("No faculty members found - showing empty state message")
+                self._show_empty_faculty_message()
+                return
+
+            # Calculate optimal number of columns based on screen width
+            screen_width = QApplication.desktop().screenGeometry().width()
+            card_width = 280  # Updated to match the improved FacultyCard width
+            spacing = 15
+            grid_container_width = self.faculty_grid.parentWidget().width()
+            if grid_container_width <= 0:
+                grid_container_width = int(screen_width * 0.6)
+            grid_container_width -= 30  # Account for margins
+            max_cols = max(1, int(grid_container_width / (card_width + spacing)))
+            if screen_width < 800:
+                max_cols = 1
+
+            # Add faculty cards to grid with centering containers
+            row, col = 0, 0
+            containers = []
+
+            logger.info(f"Creating faculty cards for {len(faculty_data_list)} faculty members")
+
+            for faculty_data in faculty_data_list:
+                try:
+                    # Create a container widget to center the card
+                    container = QWidget()
+                    container.setStyleSheet("background-color: transparent;")
+                    container_layout = QHBoxLayout(container)
+                    container_layout.setContentsMargins(0, 0, 0, 0)
+                    container_layout.setAlignment(Qt.AlignCenter)
+
+                    # Convert to format expected by FacultyCard
+                    card_data = {
+                        'id': faculty_data['id'],
+                        'name': faculty_data['name'],
+                        'department': faculty_data['department'],
+                        'available': faculty_data['status'] or faculty_data.get('always_available', False),
+                        'status': 'Available' if (faculty_data['status'] or faculty_data.get('always_available', False)) else 'Unavailable',
+                        'email': faculty_data.get('email', ''),
+                        'room': faculty_data.get('room', None)
+                    }
+
+                    logger.debug(f"Creating card for faculty {faculty_data['name']}: available={card_data['available']}, status={card_data['status']}")
+
+                    # Get pooled faculty card
+                    card = self.faculty_card_manager.get_faculty_card(
+                        card_data,
+                        consultation_callback=lambda f_data=faculty_data: self.show_consultation_form_safe(f_data)
+                    )
+
+                    # Connect consultation signal if it exists
+                    if hasattr(card, 'consultation_requested'):
+                        card.consultation_requested.connect(lambda f_data=faculty_data: self.show_consultation_form_safe(f_data))
+
+                    # Add card to container
+                    container_layout.addWidget(card)
+
+                    # Store container for batch processing
+                    containers.append((container, row, col))
+
+                    col += 1
+                    if col >= max_cols:
+                        col = 0
+                        row += 1
+
+                    logger.debug(f"Successfully created card for faculty {faculty_data['name']}")
+
+                except Exception as e:
+                    logger.error(f"Error creating faculty card for {faculty_data.get('name', 'Unknown')}: {e}")
+                    continue
+
+            # Now add all containers to the grid at once
+            for container, r, c in containers:
+                self.faculty_grid.addWidget(container, r, c)
+
+            # Log successful population
+            logger.info(f"Successfully populated faculty grid with {len(containers)} faculty cards")
+
+        finally:
+            # Re-enable updates after all changes are made
+            self.setUpdatesEnabled(True)
+
+    def show_consultation_form_safe(self, faculty_data):
+        """
+        Show consultation form using safe faculty data dictionary.
+
+        Args:
+            faculty_data (dict): Faculty data dictionary
+        """
+        try:
+            # Create a mock faculty object for compatibility
+            class MockFaculty:
+                def __init__(self, data):
+                    self.id = data['id']
+                    self.name = data['name']
+                    self.department = data['department']
+                    self.status = data['status']
+                    self.email = data.get('email', '')
+                    self.room = data.get('room', None)
+
+            mock_faculty = MockFaculty(faculty_data)
+            self.show_consultation_form(mock_faculty)
+        except Exception as e:
+            logger.error(f"Error showing consultation form for faculty {faculty_data.get('name', 'Unknown')}: {e}")
+
+    def _extract_safe_faculty_data(self, faculty_data_list):
+        """
+        Extract relevant data from safe faculty data for comparison.
+
+        Args:
+            faculty_data_list (list): List of faculty data dictionaries
+
+        Returns:
+            str: Hash of faculty data for efficient comparison
+        """
+        import hashlib
+        # Create a string representation of all relevant faculty data
+        data_str = ""
+        for f_data in sorted(faculty_data_list, key=lambda x: x['id']):  # Sort for consistent hashing
+            data_str += f"{f_data['id']}:{f_data['name']}:{f_data['status']}:{f_data.get('department', '')};"
+
+        # Return hash for efficient comparison
+        return hashlib.md5(data_str.encode()).hexdigest()
+
     def populate_faculty_grid(self, faculties):
         """
         Populate the faculty grid with faculty cards.
@@ -501,7 +645,15 @@ class DashboardWindow(BaseWindow):
         logger.info(f"Populating faculty grid with {len(faculties) if faculties else 0} faculty members")
         if faculties:
             for faculty in faculties:
-                logger.debug(f"Faculty: {faculty.name}, Status: {faculty.status}, Always Available: {getattr(faculty, 'always_available', False)}")
+                try:
+                    # Access attributes safely to avoid DetachedInstanceError
+                    faculty_name = faculty.name
+                    faculty_status = faculty.status
+                    faculty_always_available = getattr(faculty, 'always_available', False)
+                    logger.debug(f"Faculty: {faculty_name}, Status: {faculty_status}, Always Available: {faculty_always_available}")
+                except Exception as e:
+                    logger.warning(f"Error accessing faculty attributes: {e}")
+                    continue
 
         # Temporarily disable updates to reduce flickering and improve performance
         self.setUpdatesEnabled(False)
@@ -558,14 +710,23 @@ class DashboardWindow(BaseWindow):
                     container_layout.setAlignment(Qt.AlignCenter)
 
                     # Convert faculty object to dictionary format expected by FacultyCard
+                    # Access all attributes at once to avoid DetachedInstanceError
+                    faculty_id = faculty.id
+                    faculty_name = faculty.name
+                    faculty_department = faculty.department
+                    faculty_status = faculty.status
+                    faculty_always_available = getattr(faculty, 'always_available', False)
+                    faculty_email = getattr(faculty, 'email', '')
+                    faculty_room = getattr(faculty, 'room', None)
+
                     faculty_data = {
-                        'id': faculty.id,
-                        'name': faculty.name,
-                        'department': faculty.department,
-                        'available': faculty.status or getattr(faculty, 'always_available', False),  # Show if available OR always available
-                        'status': 'Available' if (faculty.status or getattr(faculty, 'always_available', False)) else 'Unavailable',
-                        'email': getattr(faculty, 'email', ''),
-                        'room': getattr(faculty, 'room', None)
+                        'id': faculty_id,
+                        'name': faculty_name,
+                        'department': faculty_department,
+                        'available': faculty_status or faculty_always_available,  # Show if available OR always available
+                        'status': 'Available' if (faculty_status or faculty_always_available) else 'Unavailable',
+                        'email': faculty_email,
+                        'room': faculty_room
                     }
 
                     logger.debug(f"Creating card for faculty {faculty.name}: available={faculty_data['available']}, status={faculty_data['status']}")
@@ -948,7 +1109,17 @@ class DashboardWindow(BaseWindow):
         # Create a string representation of all relevant faculty data
         data_str = ""
         for f in sorted(faculties, key=lambda x: x.id):  # Sort for consistent hashing
-            data_str += f"{f.id}:{f.name}:{f.status}:{getattr(f, 'department', '')};"
+            try:
+                # Access attributes safely to avoid DetachedInstanceError
+                faculty_id = f.id
+                faculty_name = f.name
+                faculty_status = f.status
+                faculty_department = getattr(f, 'department', '')
+                data_str += f"{faculty_id}:{faculty_name}:{faculty_status}:{faculty_department};"
+            except Exception as e:
+                logger.warning(f"Error accessing faculty attributes for hashing: {e}")
+                # Use a fallback representation
+                data_str += f"error:{e};"
 
         # Return hash for efficient comparison
         return hashlib.md5(data_str.encode()).hexdigest()

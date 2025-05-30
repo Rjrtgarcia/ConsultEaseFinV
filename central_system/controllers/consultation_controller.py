@@ -4,6 +4,7 @@ from ..models import Consultation, ConsultationStatus, get_db
 from ..utils.mqtt_utils import publish_consultation_request, publish_mqtt_message
 from ..utils.mqtt_topics import MQTTTopics
 from ..utils.cache_manager import invalidate_consultation_cache
+from ..services.consultation_queue_service import get_consultation_queue_service, MessagePriority
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -18,12 +19,15 @@ class ConsultationController:
         Initialize the consultation controller.
         """
         self.callbacks = []
+        self.queue_service = get_consultation_queue_service()
 
     def start(self):
         """
         Start the consultation controller.
         """
         logger.info("Starting Consultation controller")
+        # Start the consultation queue service
+        self.queue_service.start()
         # Async MQTT service is managed globally, no need to connect here
 
     def stop(self):
@@ -88,13 +92,18 @@ class ConsultationController:
 
             logger.info(f"Created consultation request: {consultation.id} (Student: {student_id}, Faculty: {faculty_id})")
 
-            # Publish consultation using the optimized method
+            # Publish consultation using the optimized method with offline queuing
             publish_success = self._publish_consultation(consultation)
 
             if publish_success:
                 logger.info(f"Successfully published consultation request {consultation.id} to faculty desk unit")
             else:
-                logger.error(f"Failed to publish consultation request {consultation.id} to faculty desk unit")
+                # Try to queue the consultation for offline faculty
+                queue_success = self.queue_service.queue_consultation_request(consultation, MessagePriority.NORMAL)
+                if queue_success:
+                    logger.info(f"Queued consultation request {consultation.id} for offline faculty {faculty_id}")
+                else:
+                    logger.error(f"Failed to publish or queue consultation request {consultation.id}")
 
             # Invalidate consultation cache for the student
             invalidate_consultation_cache(student_id)

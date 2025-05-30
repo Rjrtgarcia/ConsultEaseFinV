@@ -10,6 +10,7 @@ from ..utils.validators import (
     validate_name_safe, validate_department_safe, validate_email_safe,
     validate_ble_id_safe, InputValidator, ValidationError
 )
+from ..services.consultation_queue_service import get_consultation_queue_service
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ class FacultyController:
         Initialize the faculty controller.
         """
         self.callbacks = []
+        self.queue_service = get_consultation_queue_service()
 
     def start(self):
         """
@@ -36,6 +38,9 @@ class FacultyController:
 
         # Subscribe to legacy faculty desk unit status updates for backward compatibility
         subscribe_to_topic(MQTTTopics.LEGACY_FACULTY_STATUS, self.handle_faculty_status_update)
+
+        # Subscribe to faculty heartbeat for enhanced monitoring
+        subscribe_to_topic("consultease/faculty/+/heartbeat", self.handle_faculty_heartbeat)
 
     def stop(self):
         """
@@ -74,6 +79,8 @@ class FacultyController:
             topic (str): MQTT topic
             data (dict or str): Status update data
         """
+        logger.info(f"Received MQTT status update - Topic: {topic}, Data: {data}")
+
         faculty_id = None
         status = None
         faculty_name = None
@@ -251,10 +258,39 @@ class FacultyController:
 
             # Get status from data
             if isinstance(data, dict):
-                status = data.get('status', False)
+                # Handle enhanced status data from updated faculty desk units
+                if 'present' in data:
+                    status = bool(data.get('present'))
+                elif 'status' in data:
+                    status_str = data.get('status', '').lower()
+                    if status_str in ['available', 'present', 'true']:
+                        status = True
+                    elif status_str in ['away', 'absent', 'false']:
+                        status = False
+                    else:
+                        status = bool(data.get('status', False))
+                else:
+                    status = False
+
                 faculty_name = data.get('faculty_name')
 
-                # Check if this is a BLE beacon status update
+                # Extract enhanced status information
+                ntp_sync_status = data.get('ntp_sync_status', 'UNKNOWN')
+                grace_period_active = data.get('in_grace_period', False)
+                detailed_status = data.get('detailed_status', '')
+
+                # Update faculty with enhanced information
+                self._update_faculty_enhanced_status(faculty_id, status, ntp_sync_status, grace_period_active)
+
+                # Log enhanced status information
+                if grace_period_active:
+                    grace_remaining = data.get('grace_period_remaining', 0) // 1000  # Convert to seconds
+                    logger.info(f"Faculty {faculty_id} in grace period: {grace_remaining}s remaining")
+
+                if ntp_sync_status in ["FAILED", "SYNCING"]:
+                    logger.warning(f"Faculty {faculty_id} NTP sync issue: {ntp_sync_status}")
+
+                # Check if this is a BLE beacon status update (legacy support)
                 if 'keychain_connected' in data:
                     status = True
                     logger.info(f"BLE beacon connected for faculty {faculty_id}")
@@ -276,6 +312,9 @@ class FacultyController:
         faculty = self.update_faculty_status(faculty_id, status)
 
         if faculty:
+            # Notify consultation queue service about faculty status change
+            self.queue_service.update_faculty_status(faculty_id, status)
+
             # Notify callbacks
             self._notify_callbacks(faculty)
 
@@ -443,7 +482,7 @@ class FacultyController:
         logger.error(f"Failed to update faculty {faculty_id} status after {max_retries} attempts")
         return None
 
-    @cached_query(ttl=180)  # Cache for 3 minutes
+    @cached_query(ttl=30)  # Reduced cache time to 30 seconds for more frequent updates
     def get_all_faculty(self, filter_available=None, search_term=None, page=None, page_size=50):
         """
         Get all faculty, optionally filtered by availability or search term.
@@ -459,33 +498,45 @@ class FacultyController:
             list or dict: List of Faculty objects, or paginated results if page is specified
         """
         try:
-            db = get_db()
-            query = db.query(Faculty)
+            db = get_db(force_new=True)  # Force new session to avoid DetachedInstanceError
+            try:
+                query = db.query(Faculty)
 
-            # Apply filters
-            if filter_available is not None:
-                query = query.filter(Faculty.status == filter_available)
+                # Apply filters
+                if filter_available is not None:
+                    query = query.filter(Faculty.status == filter_available)
 
-            if search_term:
-                search_pattern = f"%{search_term}%"
-                query = query.filter(
-                    or_(
-                        Faculty.name.ilike(search_pattern),
-                        Faculty.department.ilike(search_pattern)
+                if search_term:
+                    search_pattern = f"%{search_term}%"
+                    query = query.filter(
+                        or_(
+                            Faculty.name.ilike(search_pattern),
+                            Faculty.department.ilike(search_pattern)
+                        )
                     )
-                )
 
-            # Order by name for consistent results
-            query = query.order_by(Faculty.name)
+                # Order by name for consistent results
+                query = query.order_by(Faculty.name)
 
-            # Return paginated results if page is specified
-            if page is not None:
-                return paginate_query(query, page, page_size)
+                # Return paginated results if page is specified
+                if page is not None:
+                    return paginate_query(query, page, page_size)
 
-            # For backward compatibility, return all results if no pagination
-            faculties = query.all()
-            logger.debug(f"Retrieved {len(faculties)} faculty members")
-            return faculties
+                # For backward compatibility, return all results if no pagination
+                faculties = query.all()
+
+                # Ensure all attributes are loaded before returning
+                for faculty in faculties:
+                    # Access attributes to ensure they're loaded
+                    _ = faculty.id, faculty.name, faculty.department, faculty.status
+                    _ = getattr(faculty, 'always_available', False)
+                    _ = getattr(faculty, 'email', '')
+
+                logger.debug(f"Retrieved {len(faculties)} faculty members")
+                return faculties
+
+            finally:
+                db.close()
 
         except Exception as e:
             logger.error(f"Error getting faculty list: {str(e)}")
@@ -662,6 +713,96 @@ class FacultyController:
             logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) created with BLE-based availability")
         except Exception as e:
             logger.error(f"Error publishing faculty status notification: {str(e)}")
+
+    def handle_faculty_heartbeat(self, topic: str, data):
+        """
+        Handle faculty heartbeat messages for enhanced monitoring.
+
+        Args:
+            topic (str): MQTT topic
+            data (dict or str): Heartbeat data
+        """
+        try:
+            # Parse heartbeat data
+            if isinstance(data, str):
+                try:
+                    import json
+                    heartbeat_data = json.loads(data)
+                except json.JSONDecodeError:
+                    logger.debug(f"Non-JSON heartbeat data: {data}")
+                    return
+            elif isinstance(data, dict):
+                heartbeat_data = data
+            else:
+                return
+
+            # Extract faculty ID from topic
+            faculty_id = None
+            try:
+                faculty_id = int(topic.split("/")[2])
+            except (IndexError, ValueError):
+                return
+
+            # Update last seen timestamp for the faculty
+            db = get_db()
+            try:
+                faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
+                if faculty:
+                    faculty.last_seen = datetime.datetime.now()
+                    db.commit()
+
+                    # Log important status changes
+                    if 'ntp_sync_status' in heartbeat_data:
+                        ntp_status = heartbeat_data['ntp_sync_status']
+                        if ntp_status == 'FAILED':
+                            logger.warning(f"Faculty {faculty_id} ({faculty.name}) NTP sync failed")
+                        elif ntp_status == 'SYNCED':
+                            logger.debug(f"Faculty {faculty_id} ({faculty.name}) NTP synced")
+
+                    # Monitor system health
+                    if 'free_heap' in heartbeat_data:
+                        free_heap = heartbeat_data.get('free_heap', 0)
+                        if free_heap < 50000:  # Less than 50KB free
+                            logger.warning(f"Faculty {faculty_id} ({faculty.name}) low memory: {free_heap} bytes")
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            logger.debug(f"Error processing faculty heartbeat: {str(e)}")
+
+    def _update_faculty_enhanced_status(self, faculty_id, status, ntp_sync_status, grace_period_active):
+        """
+        Update faculty with enhanced status information including NTP sync and grace period.
+
+        Args:
+            faculty_id (int): Faculty ID
+            status (bool): Presence status
+            ntp_sync_status (str): NTP synchronization status
+            grace_period_active (bool): Whether grace period is active
+        """
+        try:
+            db = get_db()
+            try:
+                faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
+                if faculty:
+                    # Update enhanced status fields
+                    faculty.ntp_sync_status = ntp_sync_status
+                    faculty.grace_period_active = grace_period_active
+                    faculty.last_seen = datetime.datetime.now()
+
+                    # Only update main status if it actually changed
+                    if faculty.status != status:
+                        faculty.status = status
+                        logger.info(f"Faculty {faculty_id} status updated: {status} (NTP: {ntp_sync_status}, Grace: {grace_period_active})")
+
+                    db.commit()
+                else:
+                    logger.warning(f"Faculty {faculty_id} not found for enhanced status update")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"Error updating enhanced faculty status: {str(e)}")
 
     def update_faculty(self, faculty_id, name=None, department=None, email=None, ble_id=None, image_path=None, always_available=None):
         """

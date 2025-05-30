@@ -23,6 +23,8 @@ class MQTTTopics:
     FACULTY_MAC_STATUS = "consultease/faculty/{faculty_id}/mac_status"
     FACULTY_REQUESTS = "consultease/faculty/{faculty_id}/requests"
     FACULTY_MESSAGES = "consultease/faculty/{faculty_id}/messages"
+    FACULTY_RESPONSES = "consultease/faculty/{faculty_id}/responses"
+    FACULTY_HEARTBEAT = "consultease/faculty/{faculty_id}/heartbeat"
 
     # System topics
     SYSTEM_NOTIFICATIONS = "consultease/system/notifications"
@@ -46,6 +48,16 @@ class MQTTTopics:
     def get_faculty_requests_topic(faculty_id):
         """Get the topic for faculty consultation requests."""
         return MQTTTopics.FACULTY_REQUESTS.format(faculty_id=faculty_id)
+
+    @staticmethod
+    def get_faculty_responses_topic(faculty_id):
+        """Get the topic for faculty consultation responses."""
+        return MQTTTopics.FACULTY_RESPONSES.format(faculty_id=faculty_id)
+
+    @staticmethod
+    def get_faculty_heartbeat_topic(faculty_id):
+        """Get the topic for faculty heartbeat messages."""
+        return MQTTTopics.FACULTY_HEARTBEAT.format(faculty_id=faculty_id)
 
     @staticmethod
     def get_faculty_messages_topic(faculty_id):

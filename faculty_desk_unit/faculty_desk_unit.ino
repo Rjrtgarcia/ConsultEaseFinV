@@ -1,1517 +1,1578 @@
+// ================================
+// NU FACULTY DESK UNIT - ESP32
+// ================================
+// Capstone Project by Jeysibn
+// WITH ADAPTIVE BLE SCANNER & GRACE PERIOD SYSTEM
+// Date: May 29, 2025 23:19 (Philippines Time)
+// Updated: Added 1-minute grace period for BLE disconnections
+// ================================
+
 #include <WiFi.h>
-#include <PubSubClient.h>  // MQTT client
+#include <PubSubClient.h>
 #include <BLEDevice.h>
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7789.h>
 #include <SPI.h>
-#include <Adafruit_GFX.h>    // Core graphics library
-#include <Adafruit_ST7789.h> // Hardware-specific library for ST7789
 #include <time.h>
-#include <WiFiUdp.h>         // For NTP client
-#include <NTPClient.h>       // NTP client library
-#include "config.h"          // Include configuration file
+#include "config.h"
 
-// Current Date/Time and User
-const char* current_date_time = "2025-05-02 09:46:02";
-const char* current_user = FACULTY_NAME;
+// ================================
+// GLOBAL OBJECTS
+// ================================
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
+Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
+BLEScan* pBLEScan;
 
-// WiFi credentials
-const char* ssid = WIFI_SSID;
-const char* password = WIFI_PASSWORD;
+// ================================
+// UI AND BUTTON VARIABLES
+// ================================
+bool timeInitialized = false;
+unsigned long lastAnimationTime = 0;
+bool animationState = false;
 
-// MQTT Broker settings
-const char* mqtt_server = MQTT_SERVER;
-const int mqtt_port = MQTT_PORT;
-char mqtt_topic_messages[50];
-char mqtt_topic_status[50];
-char mqtt_topic_mac_status[50];
-char mqtt_topic_legacy_messages[50];
-char mqtt_topic_legacy_status[50];
-char mqtt_client_id[50];
+// Button variables
+bool buttonAPressed = false;
+bool buttonBPressed = false;
+unsigned long buttonALastDebounce = 0;
+unsigned long buttonBLastDebounce = 0;
+bool buttonALastState = HIGH;
+bool buttonBLastState = HIGH;
 
-// Faculty Beacon MAC Address - nRF51822 BLE Beacon
-// This ESP32 unit is configured to detect only its assigned faculty member's beacon
-// The MAC address is defined in config.h as FACULTY_BEACON_MAC
-// IMPORTANT: Update FACULTY_BEACON_MAC in config.h with the actual nRF51822 beacon MAC address
-const char* assignedFacultyBeaconMac = FACULTY_BEACON_MAC;
+// Message variables
+bool messageDisplayed = false;
+unsigned long messageDisplayStart = 0;
+String lastReceivedMessage = "";
+String messageId = "";
 
-// Status update timing
-unsigned long lastStatusUpdate = 0;
+// Global variables
+unsigned long lastHeartbeat = 0;
+unsigned long lastMqttReconnect = 0;
 
-// MAC Address Detection Variables
-BLEScan* pBLEScan = nullptr;
-bool facultyPresent = false;
-bool oldFacultyPresent = false;
-unsigned long lastMacDetectionTime = 0;
-unsigned long lastBleScanTime = 0;
-int macDetectionCount = 0;
-int macAbsenceCount = 0;
-String detectedFacultyMac = "";
-String lastDetectedMac = "";
+bool wifiConnected = false;
+bool mqttConnected = false;
+String currentMessage = "";
+String lastDisplayedTime = "";
+String lastDisplayedDate = "";
 
-// TFT Display pins for ST7789
-#define TFT_CS    5
-#define TFT_DC    21
-#define TFT_RST   22
-#define TFT_MOSI  23
-#define TFT_SCLK  18
+// NTP synchronization variables
+bool ntpSyncInProgress = false;
+unsigned long lastNtpSyncAttempt = 0;
+int ntpRetryCount = 0;
+String ntpSyncStatus = "PENDING";
 
-// Initialize the ST7789 display with hardware SPI
-Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
+// ================================
+// SIMPLE OFFLINE MESSAGE QUEUE
+// ================================
 
-// NTP Time Synchronization Settings
-const char* ntpServer1 = NTP_SERVER_1;
-const char* ntpServer2 = NTP_SERVER_2;
-const char* ntpServer3 = NTP_SERVER_3;
-const long  gmtOffset_sec = TIMEZONE_OFFSET_HOURS * 3600;  // Convert hours to seconds
-const int   daylightOffset_sec = 0;    // Philippines doesn't use daylight saving time
+struct SimpleMessage {
+  char topic[64];
+  char payload[512];
+  unsigned long timestamp;
+  int retry_count;
+  bool is_response;
+};
 
-// NTP Client setup
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, ntpServer1, gmtOffset_sec, 60000); // Update every 60 seconds
+// Queue variables
+SimpleMessage messageQueue[10];  // Adjust size as needed
+int queueCount = 0;
+bool systemOnline = false;
 
-// Time synchronization variables
-bool ntpSyncSuccessful = false;
-bool ntpInitialized = false;
-unsigned long lastNtpSync = 0;
-unsigned long ntpSyncInterval = NTP_SYNC_INTERVAL_HOURS * 3600000; // Convert hours to milliseconds
-unsigned long ntpSyncRetryInterval = NTP_RETRY_INTERVAL_MINUTES * 60000; // Convert minutes to milliseconds
-int ntpSyncAttempts = 0;
-const int maxNtpSyncAttempts = NTP_MAX_RETRY_ATTEMPTS;
+// ================================
+// OFFLINE QUEUE FUNCTIONS
+// ================================
 
-// Variables
-WiFiClient espClient;
-PubSubClient mqttClient(espClient);
-char timeStringBuff[50];
-char dateStringBuff[50];
-String lastMessage = "";
-unsigned long lastDisplayUpdate = 0;
-unsigned long lastTimeUpdate = 0;
+void initOfflineQueue() {
+  queueCount = 0;
+  systemOnline = false;
+  DEBUG_PRINTLN("📥 Offline message queue initialized");
+}
 
-// National University Philippines Color Scheme
-#define NU_BLUE      0x0015      // Dark blue (navy) - Primary color
-#define NU_GOLD      0xFE60      // Gold/Yellow - Secondary color
-#define NU_DARKBLUE  0x000B      // Darker blue for contrasts
-#define NU_LIGHTGOLD 0xF710      // Lighter gold for highlights
-#define ST77XX_WHITE 0xFFFF      // White for text
-#define ST77XX_BLACK 0x0000      // Black for backgrounds
-#define ST77XX_GREEN 0x07E0      // Green for success indicators
-#define ST77XX_RED   0xF800      // Red for error indicators
-#define ST77XX_ORANGE 0xFD20     // Orange for warning indicators
-#define ST77XX_YELLOW 0xFFE0     // Yellow for warning indicators
-
-// Colors for the UI
-#define COLOR_BACKGROUND     NU_BLUE         // Changed to blue as primary color
-#define COLOR_TEXT           ST77XX_WHITE
-#define COLOR_HEADER         NU_DARKBLUE
-#define COLOR_MESSAGE_BG     NU_BLUE
-#define COLOR_STATUS_GOOD    NU_GOLD
-#define COLOR_STATUS_WARNING ST77XX_YELLOW
-#define COLOR_STATUS_ERROR   ST77XX_RED
-#define COLOR_ACCENT         NU_GOLD
-#define COLOR_HIGHLIGHT      NU_LIGHTGOLD
-
-// UI Layout constants - No gaps
-#define HEADER_HEIGHT 40
-#define STATUS_HEIGHT 20
-#define MESSAGE_AREA_TOP HEADER_HEIGHT        // No gap after header
-#define MESSAGE_TITLE_HEIGHT 30
-#define MESSAGE_TEXT_TOP (MESSAGE_AREA_TOP + MESSAGE_TITLE_HEIGHT)
-
-// Gold accent width
-#define ACCENT_WIDTH 5
-
-
-
-// Function to process incoming messages and extract content from JSON if needed
-String processMessage(String message) {
-  // Check if the message is in JSON format (starts with '{')
-  if (message.startsWith("{")) {
-    Serial.println("Detected JSON message, attempting to extract content");
-
-    // First try to extract the message field
-    int messageStart = message.indexOf("\"message\":\"");
-    if (messageStart > 0) {
-      messageStart += 11; // Length of "message":"
-      int messageEnd = message.indexOf("\"", messageStart);
-      if (messageEnd > messageStart) {
-        String extractedMessage = message.substring(messageStart, messageEnd);
-        // Replace escaped quotes and newlines
-        extractedMessage.replace("\\\"", "\"");
-        extractedMessage.replace("\\n", "\n");
-        Serial.print("Extracted message field: ");
-        Serial.println(extractedMessage);
-        return extractedMessage;
-      }
+bool queueMessage(const char* topic, const char* payload, bool isResponse = false) {
+  if (queueCount >= 10) {
+    DEBUG_PRINTLN("⚠️ Queue full, dropping oldest message");
+    // Shift queue to make room
+    for (int i = 0; i < 9; i++) {
+      messageQueue[i] = messageQueue[i + 1];
     }
-
-    // If message field not found, try to extract request_message field
-    messageStart = message.indexOf("\"request_message\":\"");
-    if (messageStart > 0) {
-      messageStart += 18; // Length of "request_message":"
-      int messageEnd = message.indexOf("\"", messageStart);
-      if (messageEnd > messageStart) {
-        String extractedMessage = message.substring(messageStart, messageEnd);
-        // Replace escaped quotes and newlines
-        extractedMessage.replace("\\\"", "\"");
-        extractedMessage.replace("\\n", "\n");
-
-        // Try to get student name and course code to format a complete message
-        String studentName = "";
-        int studentStart = message.indexOf("\"student_name\":\"");
-        if (studentStart > 0) {
-          studentStart += 16; // Length of "student_name":"
-          int studentEnd = message.indexOf("\"", studentStart);
-          if (studentEnd > studentStart) {
-            studentName = message.substring(studentStart, studentEnd);
-          }
-        }
-
-        String courseCode = "";
-        int courseStart = message.indexOf("\"course_code\":\"");
-        if (courseStart > 0) {
-          courseStart += 14; // Length of "course_code":"
-          int courseEnd = message.indexOf("\"", courseStart);
-          if (courseEnd > courseStart) {
-            courseCode = message.substring(courseStart, courseEnd);
-          }
-        }
-
-        // Format a complete message
-        String formattedMessage = "";
-        if (studentName != "") {
-          formattedMessage += "Student: " + studentName + "\n";
-        }
-        if (courseCode != "") {
-          formattedMessage += "Course: " + courseCode + "\n";
-        }
-        formattedMessage += "Request: " + extractedMessage;
-
-        Serial.print("Formatted message: ");
-        Serial.println(formattedMessage);
-        return formattedMessage;
-      }
-    }
-
-    // If no specific message field found, return the whole JSON for debugging
-    Serial.println("No message field found in JSON, displaying raw JSON");
-    return message;
+    queueCount = 9;
   }
 
-  // If not JSON, return the original message
-  return message;
+  // Add new message
+  strncpy(messageQueue[queueCount].topic, topic, 63);
+  strncpy(messageQueue[queueCount].payload, payload, 511);
+  messageQueue[queueCount].topic[63] = '\0';
+  messageQueue[queueCount].payload[511] = '\0';
+  messageQueue[queueCount].timestamp = millis();
+  messageQueue[queueCount].retry_count = 0;
+  messageQueue[queueCount].is_response = isResponse;
+
+  queueCount++;
+  DEBUG_PRINTF("📥 Queued message (%d in queue): %s\n", queueCount, topic);
+  return true;
 }
 
-// MAC Address Detection Functions
-String normalizeMacAddress(String mac) {
-  // Convert MAC address to uppercase and ensure consistent format
-  mac.toUpperCase();
-  mac.replace("-", ":");
-  return mac;
-}
+bool processQueuedMessages() {
+  if (!mqttClient.connected() || queueCount == 0) {
+    return false;
+  }
 
-bool isFacultyMacAddress(String mac) {
-  // Normalize the detected MAC address
-  String normalizedMac = normalizeMacAddress(mac);
+  // Process one message at a time
+  bool success = mqttClient.publish(messageQueue[0].topic, messageQueue[0].payload, MQTT_QOS);
 
-  // Check against this unit's assigned faculty beacon MAC address
-  String assignedMac = normalizeMacAddress(String(assignedFacultyBeaconMac));
+  if (success) {
+    DEBUG_PRINTF("📤 Sent queued message: %s\n", messageQueue[0].topic);
 
-  // Only match if this is the assigned faculty member's beacon
-  if (normalizedMac.equals(assignedMac)) {
-    Serial.print("Matched assigned faculty beacon: ");
-    Serial.print(normalizedMac);
-    Serial.print(" (Faculty ID: ");
-    Serial.print(FACULTY_ID);
-    Serial.print(" - ");
-    Serial.print(FACULTY_NAME);
-    Serial.println(")");
+    // Remove processed message by shifting queue
+    for (int i = 0; i < queueCount - 1; i++) {
+      messageQueue[i] = messageQueue[i + 1];
+    }
+    queueCount--;
     return true;
+  } else {
+    // Increment retry count
+    messageQueue[0].retry_count++;
+    if (messageQueue[0].retry_count > 3) {
+      DEBUG_PRINTLN("❌ Message failed after 3 retries, dropping");
+      // Remove failed message
+      for (int i = 0; i < queueCount - 1; i++) {
+        messageQueue[i] = messageQueue[i + 1];
+      }
+      queueCount--;
+    }
+    return false;
   }
-
-  return false;
 }
 
-// BLE Scan Callback Class with Enhanced Debugging
-class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
-    void onResult(BLEAdvertisedDevice advertisedDevice) {
-      String deviceMac = advertisedDevice.getAddress().toString().c_str();
-      int rssi = advertisedDevice.getRSSI();
-      String deviceName = "";
+void updateOfflineQueue() {
+  // Update online status
+  bool wasOnline = systemOnline;
+  systemOnline = wifiConnected && mqttConnected;
 
-      // Get device name if available
-      if (advertisedDevice.haveName()) {
-        deviceName = advertisedDevice.getName().c_str();
+  // If just came online, process queue
+  if (!wasOnline && systemOnline && queueCount > 0) {
+    DEBUG_PRINTF("🌐 System online - processing %d queued messages\n", queueCount);
+  }
+
+  // Process one message per update cycle
+  if (systemOnline) {
+    processQueuedMessages();
+  }
+}
+
+// Enhanced publish function with queuing
+bool publishWithQueue(const char* topic, const char* payload, bool isResponse = false) {
+  if (mqttClient.connected()) {
+    bool success = mqttClient.publish(topic, payload, MQTT_QOS);
+    if (success) {
+      return true;
+    } else {
+      // MQTT publish failed, queue the message
+      return queueMessage(topic, payload, isResponse);
+    }
+  } else {
+    // Not connected, queue the message
+    return queueMessage(topic, payload, isResponse);
+  }
+}
+
+// ================================
+// FORWARD DECLARATIONS
+// ================================
+void publishPresenceUpdate();
+void updateMainDisplay();
+void updateSystemStatus();
+
+// ================================
+// BEACON VALIDATOR
+// ================================
+bool isFacultyBeacon(BLEAdvertisedDevice& device) {
+  String deviceMAC = device.getAddress().toString().c_str();
+  deviceMAC.toUpperCase();
+
+  String expectedMAC = String(FACULTY_BEACON_MAC);
+  expectedMAC.toUpperCase();
+
+  return deviceMAC.equals(expectedMAC);
+}
+
+// ================================
+// BUTTON HANDLING CLASS
+// ================================
+class ButtonHandler {
+private:
+  int pinA, pinB;
+  bool lastStateA, lastStateB;
+  unsigned long lastDebounceA, lastDebounceB;
+
+public:
+  ButtonHandler(int buttonAPin, int buttonBPin) {
+    pinA = buttonAPin;
+    pinB = buttonBPin;
+    lastStateA = HIGH;
+    lastStateB = HIGH;
+    lastDebounceA = 0;
+    lastDebounceB = 0;
+  }
+
+  void init() {
+    pinMode(pinA, INPUT_PULLUP);
+    pinMode(pinB, INPUT_PULLUP);
+    DEBUG_PRINTLN("Buttons initialized:");
+    DEBUG_PRINTF("  Button A (Blue/Acknowledge): Pin %d\n", pinA);
+    DEBUG_PRINTF("  Button B (Red/Busy): Pin %d\n", pinB);
+  }
+
+  void update() {
+    // Button A (Acknowledge) handling
+    bool readingA = digitalRead(pinA);
+    if (readingA != lastStateA) {
+      lastDebounceA = millis();
+    }
+
+    if ((millis() - lastDebounceA) > BUTTON_DEBOUNCE_DELAY) {
+      if (readingA == LOW && lastStateA == HIGH) {
+        buttonAPressed = true;
+        DEBUG_PRINTLN("🔵 BUTTON A (ACKNOWLEDGE) PRESSED");
+      }
+    }
+    lastStateA = readingA;
+
+    // Button B (Busy) handling
+    bool readingB = digitalRead(pinB);
+    if (readingB != lastStateB) {
+      lastDebounceB = millis();
+    }
+
+    if ((millis() - lastDebounceB) > BUTTON_DEBOUNCE_DELAY) {
+      if (readingB == LOW && lastStateB == HIGH) {
+        buttonBPressed = true;
+        DEBUG_PRINTLN("🔴 BUTTON B (BUSY) PRESSED");
+      }
+    }
+    lastStateB = readingB;
+  }
+
+  bool isButtonAPressed() {
+    if (buttonAPressed) {
+      buttonAPressed = false;
+      return true;
+    }
+    return false;
+  }
+
+  bool isButtonBPressed() {
+    if (buttonBPressed) {
+      buttonBPressed = false;
+      return true;
+    }
+    return false;
+  }
+};
+
+// ================================
+// ENHANCED PRESENCE DETECTOR WITH GRACE PERIOD
+// ================================
+class BooleanPresenceDetector {
+private:
+  bool currentPresence = false;           // Current confirmed status
+  bool lastKnownPresence = false;         // Last status before disconnection
+  unsigned long lastDetectionTime = 0;   // Last successful BLE detection
+  unsigned long lastStateChange = 0;      // Last confirmed status change
+  unsigned long gracePeriodStartTime = 0; // When grace period started
+
+  // Grace period state
+  bool inGracePeriod = false;
+  int gracePeriodAttempts = 0;
+
+  // Detection counters for immediate detection
+  int consecutiveDetections = 0;
+  int consecutiveMisses = 0;
+
+  const int CONFIRM_SCANS = 2;            // Scans needed to confirm presence
+  const int CONFIRM_ABSENCE_SCANS = 3;    // More scans needed to confirm absence
+
+public:
+  void checkBeacon(bool beaconFound, int rssi = 0) {
+    unsigned long now = millis();
+
+    if (beaconFound) {
+      // Beacon detected!
+      lastDetectionTime = now;
+      consecutiveDetections++;
+      consecutiveMisses = 0;
+
+      // Optional RSSI filtering for better reliability
+      if (rssi != 0 && rssi < BLE_SIGNAL_STRENGTH_THRESHOLD) {
+        DEBUG_PRINTF("⚠️ Beacon found but signal weak: %d dBm (threshold: %d)\n",
+                    rssi, BLE_SIGNAL_STRENGTH_THRESHOLD);
+        return; // Ignore weak signals
       }
 
-      // Log all detected devices for debugging
-      Serial.print("BLE Device: ");
-      Serial.print(deviceMac);
-      Serial.print(" | RSSI: ");
-      Serial.print(rssi);
-      Serial.print(" dBm | Name: ");
-      Serial.print(deviceName.length() > 0 ? deviceName : "Unknown");
-
-      // Show additional device information
-      if (advertisedDevice.haveServiceUUID()) {
-        Serial.print(" | Service: ");
-        Serial.print(advertisedDevice.getServiceUUID().toString().c_str());
+      // If we were in grace period, cancel it
+      if (inGracePeriod) {
+        DEBUG_PRINTF("✅ BLE reconnected during grace period! (attempt %d/%d)\n",
+                   gracePeriodAttempts, BLE_RECONNECT_MAX_ATTEMPTS);
+        endGracePeriod(true); // Successfully reconnected
       }
 
-      if (advertisedDevice.haveManufacturerData()) {
-        Serial.print(" | Mfg Data: Yes");
+      // Confirm presence if we have enough detections
+      if (consecutiveDetections >= CONFIRM_SCANS && !currentPresence) {
+        updatePresenceStatus(true, now);
       }
 
-      Serial.println();
+    } else {
+      // Beacon NOT detected
+      consecutiveMisses++;
+      consecutiveDetections = 0;
 
-      // Check if this is our target faculty beacon
-      bool isTargetBeacon = isFacultyMacAddress(deviceMac);
-      bool rssiAcceptable = (rssi > BLE_RSSI_THRESHOLD);
-
-      if (isTargetBeacon) {
-        Serial.print("*** TARGET BEACON FOUND: ");
-        Serial.print(deviceMac);
-        Serial.print(" | RSSI: ");
-        Serial.print(rssi);
-        Serial.print(" dBm | Threshold: ");
-        Serial.print(BLE_RSSI_THRESHOLD);
-        Serial.print(" dBm | ");
-        Serial.println(rssiAcceptable ? "RSSI OK" : "RSSI TOO WEAK");
-
-        if (rssiAcceptable) {
-          // Update detection variables
-          detectedFacultyMac = deviceMac;
-          lastMacDetectionTime = millis();
-          macDetectionCount++;
-          macAbsenceCount = 0; // Reset absence counter
-
-          Serial.print("Faculty presence detected: ");
-          Serial.print(FACULTY_NAME);
-          Serial.print(" (Detection count: ");
-          Serial.print(macDetectionCount);
-          Serial.println(")");
+      // Handle absence detection
+      if (currentPresence && consecutiveMisses >= CONFIRM_ABSENCE_SCANS) {
+        // Professor was present but now we can't detect beacon
+        if (!inGracePeriod) {
+          startGracePeriod(now);
         } else {
-          Serial.println("Target beacon found but RSSI too weak - not counting as detection");
+          updateGracePeriod(now);
         }
+      } else if (!currentPresence) {
+        // Professor was already away, continue normal operation
+        inGracePeriod = false;
       }
+    }
+  }
+
+private:
+  void startGracePeriod(unsigned long now) {
+    inGracePeriod = true;
+    gracePeriodStartTime = now;
+    gracePeriodAttempts = 0;
+    lastKnownPresence = currentPresence; // Remember status before grace period
+
+    DEBUG_PRINTF("⏳ Starting grace period - Professor was PRESENT, giving %d seconds to reconnect...\n",
+                BLE_GRACE_PERIOD_MS / 1000);
+
+    // Note: No display changes - your existing display will continue showing "AVAILABLE"
+    // until grace period expires, which is exactly what we want!
+  }
+
+  void updateGracePeriod(unsigned long now) {
+    gracePeriodAttempts++;
+
+    unsigned long elapsed = now - gracePeriodStartTime;
+    unsigned long remaining = BLE_GRACE_PERIOD_MS - elapsed;
+
+    DEBUG_PRINTF("⏳ Grace period: attempt %d/%d | %lu seconds remaining\n",
+                gracePeriodAttempts, BLE_RECONNECT_MAX_ATTEMPTS, remaining / 1000);
+
+    // Check if grace period expired
+    if (elapsed >= BLE_GRACE_PERIOD_MS || gracePeriodAttempts >= BLE_RECONNECT_MAX_ATTEMPTS) {
+      DEBUG_PRINTLN("⏰ Grace period expired - Professor confirmed AWAY");
+      endGracePeriod(false); // Grace period failed
+    }
+  }
+
+  void endGracePeriod(bool reconnected) {
+    inGracePeriod = false;
+    gracePeriodAttempts = 0;
+
+    if (reconnected) {
+      // Beacon reconnected - maintain PRESENT status
+      DEBUG_PRINTLN("🔄 Grace period ended - Professor still PRESENT (reconnected)");
+      // Status doesn't change, just clear grace period state
+      // Display will continue showing "AVAILABLE" - no change needed!
+    } else {
+      // Grace period expired - confirm AWAY
+      DEBUG_PRINTLN("🔄 Grace period expired - Professor confirmed AWAY");
+      updatePresenceStatus(false, millis());
+    }
+  }
+
+  void updatePresenceStatus(bool newPresence, unsigned long now) {
+    if (newPresence != currentPresence) {
+      currentPresence = newPresence;
+      lastStateChange = now;
+
+      DEBUG_PRINTF("🔄 Professor status CONFIRMED: %s\n",
+                 currentPresence ? "PRESENT" : "AWAY");
+
+      // Reset counters
+      consecutiveDetections = 0;
+      consecutiveMisses = 0;
+
+      // Update systems
+      publishPresenceUpdate();
+      updateMainDisplay(); // This will call your existing display function
+    }
+  }
+
+public:
+  // Public getters (keeping your existing interface)
+  bool getPresence() const {
+    // During grace period, still return true (professor considered present)
+    if (inGracePeriod) {
+      return lastKnownPresence;
+    }
+    return currentPresence;
+  }
+
+  String getStatusString() const {
+    // During grace period, maintain last known status
+    if (inGracePeriod) {
+      return lastKnownPresence ? "AVAILABLE" : "AWAY";
+    }
+    return currentPresence ? "AVAILABLE" : "AWAY";
+  }
+
+  // Additional methods for debugging (optional)
+  bool isInGracePeriod() const { return inGracePeriod; }
+
+  unsigned long getGracePeriodRemaining() const {
+    if (!inGracePeriod) return 0;
+    unsigned long elapsed = millis() - gracePeriodStartTime;
+    return elapsed < BLE_GRACE_PERIOD_MS ? (BLE_GRACE_PERIOD_MS - elapsed) : 0;
+  }
+
+  String getDetailedStatus() const {
+    if (inGracePeriod) {
+      unsigned long remaining = getGracePeriodRemaining() / 1000;
+      return "AVAILABLE (reconnecting... " + String(remaining) + "s)";
+    }
+    return getStatusString();
+  }
+};
+
+// ================================
+// ADAPTIVE BLE SCANNER CLASS (Enhanced for Grace Period)
+// ================================
+class AdaptiveBLEScanner {
+private:
+    enum ScanMode {
+        SEARCHING,      // Looking for professor (frequent scans)
+        MONITORING,     // Professor present (occasional scans)
+        VERIFYING       // Confirming state change
+    };
+
+    ScanMode currentMode = SEARCHING;
+    unsigned long lastScanTime = 0;
+    unsigned long modeChangeTime = 0;
+    unsigned long statsReportTime = 0;
+
+    // Detection counters
+    int consecutiveDetections = 0;
+    int consecutiveMisses = 0;
+
+    // Reference to presence detector (will be set in init)
+    BooleanPresenceDetector* presenceDetectorPtr = nullptr;
+
+    // Performance stats
+    struct {
+        unsigned long totalScans = 0;
+        unsigned long successfulDetections = 0;
+        unsigned long gracePeriodActivations = 0;
+        unsigned long gracePeriodSuccesses = 0;
+        unsigned long timeInSearching = 0;
+        unsigned long timeInMonitoring = 0;
+        unsigned long timeInVerifying = 0;
+        unsigned long lastModeStart = 0;
+    } stats;
+
+    // Dynamic intervals based on mode and grace period
+    unsigned long getCurrentScanInterval() {
+        // During grace period, scan more frequently to catch reconnections
+        if (presenceDetectorPtr && presenceDetectorPtr->isInGracePeriod()) {
+            return BLE_RECONNECT_ATTEMPT_INTERVAL;
+        }
+
+        switch(currentMode) {
+            case SEARCHING: return BLE_SCAN_INTERVAL_SEARCHING;
+            case MONITORING: return BLE_SCAN_INTERVAL_MONITORING;
+            case VERIFYING: return BLE_SCAN_INTERVAL_VERIFICATION;
+            default: return BLE_SCAN_INTERVAL_SEARCHING;
+        }
+    }
+
+    int getCurrentScanDuration() {
+        // During grace period, use quick scans to save power while still being responsive
+        if (presenceDetectorPtr && presenceDetectorPtr->isInGracePeriod()) {
+            return BLE_SCAN_DURATION_QUICK;
+        }
+
+        switch(currentMode) {
+            case SEARCHING: return BLE_SCAN_DURATION_FULL;
+            case MONITORING: return BLE_SCAN_DURATION_QUICK;
+            case VERIFYING: return BLE_SCAN_DURATION_QUICK;
+            default: return BLE_SCAN_DURATION_FULL;
+        }
+    }
+
+    void updateStats(unsigned long now) {
+        // Update time in current mode
+        unsigned long timeInMode = now - stats.lastModeStart;
+        switch(currentMode) {
+            case SEARCHING: stats.timeInSearching += timeInMode; break;
+            case MONITORING: stats.timeInMonitoring += timeInMode; break;
+            case VERIFYING: stats.timeInVerifying += timeInMode; break;
+        }
+        stats.lastModeStart = now;
+
+        // Report stats periodically
+        if (now - statsReportTime > BLE_STATS_REPORT_INTERVAL) {
+            reportStats();
+            statsReportTime = now;
+        }
+    }
+
+    void reportStats() {
+        unsigned long totalTime = stats.timeInSearching + stats.timeInMonitoring + stats.timeInVerifying;
+        if (totalTime > 0) {
+            float searchingPercent = (stats.timeInSearching * 100.0) / totalTime;
+            float monitoringPercent = (stats.timeInMonitoring * 100.0) / totalTime;
+            float verifyingPercent = (stats.timeInVerifying * 100.0) / totalTime;
+            float successRate = (stats.successfulDetections * 100.0) / max(stats.totalScans, 1UL);
+            float gracePeriodSuccessRate = stats.gracePeriodActivations > 0 ?
+                                         (stats.gracePeriodSuccesses * 100.0) / stats.gracePeriodActivations : 0;
+
+            DEBUG_PRINTLN("📊 === BLE SCANNER STATS (WITH GRACE PERIOD) ===");
+            DEBUG_PRINTF("   Total Scans: %lu | Success Rate: %.1f%%\n",
+                        stats.totalScans, successRate);
+            DEBUG_PRINTF("   Grace Periods: %lu activated | %.1f%% successful reconnections\n",
+                        stats.gracePeriodActivations, gracePeriodSuccessRate);
+            DEBUG_PRINTF("   Time Distribution - Searching: %.1f%% | Monitoring: %.1f%% | Verifying: %.1f%%\n",
+                        searchingPercent, monitoringPercent, verifyingPercent);
+            DEBUG_PRINTF("   Current Mode: %s | Interval: %lums\n",
+                        getModeString().c_str(), getCurrentScanInterval());
+        }
+    }
+
+public:
+    void init(BooleanPresenceDetector* detector) {
+        presenceDetectorPtr = detector;
+        currentMode = SEARCHING;
+        lastScanTime = 0;
+        modeChangeTime = millis();
+        statsReportTime = millis();
+        stats.lastModeStart = millis();
+
+        DEBUG_PRINTLN("🔍 Adaptive BLE Scanner with Grace Period initialized");
+        DEBUG_PRINTF("   Searching Mode: %dms interval, %ds duration\n",
+                    BLE_SCAN_INTERVAL_SEARCHING, BLE_SCAN_DURATION_FULL);
+        DEBUG_PRINTF("   Monitoring Mode: %dms interval, %ds duration\n",
+                    BLE_SCAN_INTERVAL_MONITORING, BLE_SCAN_DURATION_QUICK);
+        DEBUG_PRINTF("   Grace Period: %ds with %dms reconnect attempts\n",
+                    BLE_GRACE_PERIOD_MS / 1000, BLE_RECONNECT_ATTEMPT_INTERVAL);
+    }
+
+    void update() {
+        if (!presenceDetectorPtr) return;  // Safety check
+
+        unsigned long now = millis();
+        unsigned long interval = getCurrentScanInterval();
+
+        // Check if it's time to scan
+        if (now - lastScanTime < interval) return;
+
+        // Update stats before scanning
+        updateStats(now);
+
+        // Perform adaptive scan
+        bool beaconFound = performScan();
+        lastScanTime = now;
+        stats.totalScans++;
+
+        if (beaconFound) {
+            stats.successfulDetections++;
+            consecutiveDetections++;
+            consecutiveMisses = 0;
+        } else {
+            consecutiveMisses++;
+            consecutiveDetections = 0;
+        }
+
+        // Smart mode switching (enhanced for grace period)
+        updateScanMode(beaconFound, now);
+
+        // Send to presence detector (this handles grace period logic)
+        presenceDetectorPtr->checkBeacon(beaconFound);
+
+        // Debug info (show grace period status)
+        if (stats.totalScans % 10 == 0 || beaconFound || presenceDetectorPtr->isInGracePeriod()) {
+            String gracePeriodInfo = "";
+            if (presenceDetectorPtr->isInGracePeriod()) {
+                unsigned long remaining = presenceDetectorPtr->getGracePeriodRemaining() / 1000;
+                gracePeriodInfo = " | GRACE: " + String(remaining) + "s";
+            }
+
+            DEBUG_PRINTF("🔍 BLE Scan #%lu: %s | Mode: %s%s | Next: %lums\n",
+                        stats.totalScans,
+                        beaconFound ? "✅ FOUND" : "❌ MISS",
+                        getModeString().c_str(),
+                        gracePeriodInfo.c_str(),
+                        interval);
+        }
+    }
+
+    // Get current scanning statistics
+    String getStatsString() {
+        float efficiency = 0;
+        unsigned long totalActiveTime = stats.timeInSearching + stats.timeInMonitoring;
+        if (totalActiveTime > 0) {
+            efficiency = (stats.timeInMonitoring * 100.0) / totalActiveTime;
+        }
+
+        String modeStr = getModeString().substring(0, 3);
+        if (presenceDetectorPtr && presenceDetectorPtr->isInGracePeriod()) {
+            modeStr = "GRC"; // Grace period indicator
+        }
+
+        return modeStr + ":" + String(efficiency, 0) + "%";
+    }
+
+private:
+    bool performScan() {
+        int duration = getCurrentScanDuration();
+
+        // Add error handling for BLE scan
+        BLEScanResults* results = nullptr;
+        bool beaconDetected = false;
+        int bestRSSI = -999;
+
+        try {
+            results = pBLEScan->start(duration, false);
+
+            if (results && results->getCount() > 0) {
+                for (int i = 0; i < results->getCount(); i++) {
+                    BLEAdvertisedDevice device = results->getDevice(i);
+                    if (isFacultyBeacon(device)) {
+                        beaconDetected = true;
+                        bestRSSI = device.getRSSI();
+
+                        // Log RSSI occasionally for signal strength monitoring
+                        if (stats.totalScans % 20 == 0) {
+                            DEBUG_PRINTF("📶 Beacon RSSI: %d dBm\n", bestRSSI);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            pBLEScan->clearResults();
+
+        } catch (...) {
+            DEBUG_PRINTLN("⚠️ BLE scan error - continuing");
+            beaconDetected = false;
+        }
+
+        return beaconDetected;
+    }
+
+    void updateScanMode(bool beaconFound, unsigned long now) {
+        ScanMode newMode = currentMode;
+
+        switch(currentMode) {
+            case SEARCHING:
+                // Switch to verification after consistent detections
+                if (consecutiveDetections >= 2) {
+                    newMode = VERIFYING;
+                    DEBUG_PRINTLN("📡 BLE Mode: SEARCHING -> VERIFYING (beacon detected)");
+                }
+                break;
+
+            case MONITORING:
+                // Switch to verification if beacon goes missing
+                if (consecutiveMisses >= 2) {
+                    newMode = VERIFYING;
+                    DEBUG_PRINTLN("📡 BLE Mode: MONITORING -> VERIFYING (beacon lost)");
+                }
+                break;
+
+            case VERIFYING:
+                // Stay in verification for minimum time, then decide
+                if (now - modeChangeTime > PRESENCE_CONFIRM_TIME) {
+                    if (consecutiveDetections > consecutiveMisses) {
+                        newMode = MONITORING;
+                        DEBUG_PRINTLN("📡 BLE Mode: VERIFYING -> MONITORING (presence confirmed)");
+                    } else {
+                        newMode = SEARCHING;
+                        DEBUG_PRINTLN("📡 BLE Mode: VERIFYING -> SEARCHING (absence confirmed)");
+                    }
+                }
+                break;
+        }
+
+        // Execute mode change
+        if (newMode != currentMode) {
+            // Update stats for old mode
+            updateStats(now);
+
+            // Change mode
+            currentMode = newMode;
+            modeChangeTime = now;
+            consecutiveDetections = 0;
+            consecutiveMisses = 0;
+
+            DEBUG_PRINTF("🔄 New scan interval: %lums, duration: %ds\n",
+                        getCurrentScanInterval(), getCurrentScanDuration());
+        }
+    }
+
+    String getModeString() {
+        switch(currentMode) {
+            case SEARCHING: return "SEARCHING";
+            case MONITORING: return "MONITORING";
+            case VERIFYING: return "VERIFYING";
+            default: return "UNKNOWN";
+        }
     }
 };
 
-void initializeBLEScanner() {
-  Serial.println("=== BLE Scanner Initialization ===");
-  Serial.println("Initializing BLE Scanner for nRF51822 beacon detection...");
-  Serial.print("Assigned Faculty: ");
-  Serial.print(FACULTY_NAME);
-  Serial.print(" (ID: ");
-  Serial.print(FACULTY_ID);
-  Serial.println(")");
-  Serial.print("Target Beacon MAC: ");
-  Serial.println(assignedFacultyBeaconMac);
+// ================================
+// GLOBAL INSTANCES (CORRECT ORDER)
+// ================================
+BooleanPresenceDetector presenceDetector;
+ButtonHandler buttons(BUTTON_A_PIN, BUTTON_B_PIN);
+AdaptiveBLEScanner adaptiveScanner;
 
-  // Check if beacon MAC is configured
-  if (String(assignedFacultyBeaconMac) == "00:00:00:00:00:00") {
-    Serial.println("*** WARNING: Beacon MAC address not configured! ***");
-    Serial.println("*** Please update FACULTY_BEACON_MAC in config.h ***");
-    Serial.println("*** Detection will not work with default MAC address ***");
-    displaySystemStatus("Beacon MAC not configured!");
-  }
+// ================================
+// BLE CALLBACK CLASS
+// ================================
+class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
+  void onResult(BLEAdvertisedDevice advertisedDevice) {}
+};
 
-  Serial.println("BLE Configuration:");
-  Serial.print("  Scan Interval: ");
-  Serial.print(BLE_SCAN_INTERVAL);
-  Serial.println(" ms");
-  Serial.print("  Scan Duration: ");
-  Serial.print(BLE_SCAN_DURATION);
-  Serial.println(" seconds");
-  Serial.print("  RSSI Threshold: ");
-  Serial.print(BLE_RSSI_THRESHOLD);
-  Serial.println(" dBm");
-  Serial.print("  Active Scan: ");
-  Serial.println(MAC_SCAN_ACTIVE ? "Yes" : "No");
-  Serial.print("  Detection Debounce: ");
-  Serial.println(MAC_DETECTION_DEBOUNCE);
-
-  // Initialize BLE
-  String deviceName = "ConsultEase-Faculty-" + String(FACULTY_ID);
-  BLEDevice::init(deviceName.c_str());
-  Serial.print("BLE Device Name: ");
-  Serial.println(deviceName);
-
-  // Create BLE Scanner with optimized parameters for nRF51822
-  pBLEScan = BLEDevice::getScan();
-  pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
-  pBLEScan->setActiveScan(MAC_SCAN_ACTIVE);
-
-  // Optimized scan parameters for nRF51822 beacon detection
-  // Interval: 80ms (recommended for beacon scanning)
-  // Window: 80ms (100% duty cycle for maximum detection)
-  pBLEScan->setInterval(80);
-  pBLEScan->setWindow(80);
-
-  Serial.println("BLE Scanner Parameters:");
-  Serial.println("  Scan Interval: 80ms (optimized for beacons)");
-  Serial.println("  Scan Window: 80ms (100% duty cycle)");
-  Serial.println("  Scan Type: " + String(MAC_SCAN_ACTIVE ? "Active" : "Passive"));
-
-  Serial.println("✅ BLE Scanner initialized successfully");
-  Serial.println("=== Ready for nRF51822 Beacon Detection ===");
-  displaySystemStatus("BLE Scanner ready");
+// ================================
+// SIMPLE UI HELPER FUNCTIONS (UNCHANGED)
+// ================================
+void drawSimpleCard(int x, int y, int w, int h, uint16_t color) {
+  tft.fillRect(x, y, w, h, color);
+  tft.drawRect(x, y, w, h, COLOR_ACCENT);
 }
 
-void performBLEScan() {
-  if (pBLEScan == nullptr) {
-    Serial.println("❌ BLE Scanner not initialized");
-    return;
-  }
-
-  unsigned long currentTime = millis();
-
-  // Only scan at specified intervals
-  if (currentTime - lastBleScanTime < BLE_SCAN_INTERVAL) {
-    return;
-  }
-
-  lastBleScanTime = currentTime;
-
-  Serial.println();
-  Serial.println("=== BLE SCAN START ===");
-  Serial.print("🔍 Scanning for ");
-  Serial.print(FACULTY_NAME);
-  Serial.println("'s nRF51822 beacon...");
-  Serial.print("Target MAC: ");
-  Serial.println(assignedFacultyBeaconMac);
-  Serial.print("RSSI Threshold: ");
-  Serial.print(BLE_RSSI_THRESHOLD);
-  Serial.println(" dBm");
-
-  displaySystemStatus("Scanning for beacon...");
-
-  // Clear previous detection for this scan
-  String previousDetectedMac = detectedFacultyMac;
-  detectedFacultyMac = "";
-
-  // Record scan start time
-  unsigned long scanStartTime = millis();
-
-  // Perform scan with enhanced error handling
-  BLEScanResults* foundDevices = nullptr;
-  try {
-    foundDevices = pBLEScan->start(BLE_SCAN_DURATION, false);
-  } catch (const std::exception& e) {
-    Serial.print("❌ BLE scan failed with exception: ");
-    Serial.println(e.what());
-    displaySystemStatus("BLE scan error");
-    return;
-  }
-
-  unsigned long scanDuration = millis() - scanStartTime;
-
-  // Scan results summary
-  Serial.println("--- SCAN RESULTS ---");
-  Serial.print("Scan Duration: ");
-  Serial.print(scanDuration);
-  Serial.println(" ms");
-
-  int totalDevicesFound = 0;
-  if (foundDevices) {
-    totalDevicesFound = foundDevices->getCount();
-  }
-
-  Serial.print("Total BLE devices found: ");
-  Serial.println(totalDevicesFound);
-
-  // Check if we detected the assigned faculty member's beacon
-  bool currentScanDetected = (detectedFacultyMac.length() > 0);
-
-  if (currentScanDetected) {
-    Serial.println("✅ TARGET BEACON DETECTED!");
-    Serial.print("   Faculty: ");
-    Serial.println(FACULTY_NAME);
-    Serial.print("   MAC: ");
-    Serial.println(detectedFacultyMac);
-    Serial.print("   Detection Count: ");
-    Serial.println(macDetectionCount);
-    displaySystemStatus(String(FACULTY_NAME) + " detected");
-  } else {
-    Serial.println("❌ Target beacon NOT detected");
-    Serial.print("   Looking for: ");
-    Serial.println(assignedFacultyBeaconMac);
-    Serial.print("   Absence Count: ");
-    Serial.println(macAbsenceCount + 1);
-    macAbsenceCount++;
-
-    // Provide troubleshooting hints
-    if (String(assignedFacultyBeaconMac) == "00:00:00:00:00:00") {
-      Serial.println("   ⚠️  ISSUE: Default MAC address - please configure actual beacon MAC");
-    } else if (totalDevicesFound == 0) {
-      Serial.println("   ⚠️  ISSUE: No BLE devices found - check beacon is powered and advertising");
+void drawStatusIndicator(int x, int y, bool available) {
+  int radius = 12;
+  if (available) {
+    if (animationState) {
+      tft.fillCircle(x, y, radius + 2, COLOR_SUCCESS);
+      tft.fillCircle(x, y, radius, COLOR_ACCENT);
     } else {
-      Serial.println("   ⚠️  ISSUE: Beacon not in range or MAC address mismatch");
+      tft.fillCircle(x, y, radius, COLOR_SUCCESS);
     }
-
-    displaySystemStatus("Beacon not found");
-  }
-
-  // Clear scan results to free memory
-  pBLEScan->clearResults();
-
-  // Update faculty presence based on debouncing logic
-  updateFacultyPresenceStatus();
-
-  // Display scan statistics
-  Serial.println("--- SCAN STATISTICS ---");
-  Serial.print("Current Faculty Status: ");
-  Serial.println(facultyPresent ? "PRESENT" : "ABSENT");
-  Serial.print("Detection Count: ");
-  Serial.println(macDetectionCount);
-  Serial.print("Absence Count: ");
-  Serial.println(macAbsenceCount);
-  Serial.print("Last Detection: ");
-  if (lastMacDetectionTime > 0) {
-    Serial.print((currentTime - lastMacDetectionTime) / 1000);
-    Serial.println(" seconds ago");
+    tft.fillCircle(x, y, radius - 4, COLOR_WHITE);
+    tft.fillCircle(x, y, 3, COLOR_SUCCESS);
   } else {
-    Serial.println("Never");
-  }
-
-  Serial.println("=== BLE SCAN END ===");
-  Serial.println();
-}
-
-void updateFacultyPresenceStatus() {
-  bool newFacultyPresent = false;
-
-  // Determine presence based on recent detections and debouncing
-  if (macDetectionCount >= MAC_DETECTION_DEBOUNCE) {
-    // Faculty has been consistently detected
-    newFacultyPresent = true;
-  } else if (macAbsenceCount >= MAC_DETECTION_DEBOUNCE) {
-    // Faculty has been consistently absent
-    newFacultyPresent = false;
-  } else {
-    // Not enough consistent readings, maintain current state
-    newFacultyPresent = facultyPresent;
-  }
-
-  // Check for timeout (faculty left without proper detection)
-  unsigned long currentTime = millis();
-  if (facultyPresent && (currentTime - lastMacDetectionTime > MAC_DETECTION_TIMEOUT)) {
-    Serial.println("Faculty presence timeout - marking as absent");
-    newFacultyPresent = false;
-    macAbsenceCount = MAC_DETECTION_DEBOUNCE; // Force absence state
-  }
-
-  // Update status if changed
-  if (newFacultyPresent != facultyPresent) {
-    oldFacultyPresent = facultyPresent;
-    facultyPresent = newFacultyPresent;
-
-    // Reset counters when state changes
-    macDetectionCount = 0;
-    macAbsenceCount = 0;
-
-    // Update last detected MAC for status reporting
-    if (facultyPresent) {
-      lastDetectedMac = detectedFacultyMac;
-    }
-
-    Serial.print(FACULTY_NAME);
-    Serial.print(" presence changed: ");
-    Serial.println(facultyPresent ? "PRESENT" : "ABSENT");
-
-    // Publish status change via MQTT
-    publishFacultyStatus();
+    tft.fillCircle(x, y, radius, COLOR_ERROR);
+    tft.fillCircle(x, y, radius - 4, COLOR_WHITE);
+    tft.fillCircle(x, y, 3, COLOR_ERROR);
   }
 }
 
-void publishFacultyStatus() {
-  if (!mqttClient.connected()) {
-    Serial.println("MQTT not connected, cannot publish status");
+int getCenterX(String text, int textSize) {
+  int charWidth = 6 * textSize;
+  int textWidth = text.length() * charWidth;
+  return (SCREEN_WIDTH - textWidth) / 2;
+}
+
+// ================================
+// BUTTON RESPONSE FUNCTIONS (UNCHANGED)
+// ================================
+void handleAcknowledgeButton() {
+  if (!messageDisplayed || currentMessage.isEmpty()) return;
+
+  DEBUG_PRINTLN("📤 Sending ACKNOWLEDGE response to central terminal");
+
+  // Create acknowledge response
+  String response = "{";
+  response += "\"faculty_id\":" + String(FACULTY_ID) + ",";
+  response += "\"faculty_name\":\"" + String(FACULTY_NAME) + "\",";
+  response += "\"response_type\":\"ACKNOWLEDGE\",";
+  response += "\"message_id\":\"" + messageId + "\",";
+  response += "\"original_message\":\"" + currentMessage + "\",";
+  response += "\"timestamp\":\"" + String(millis()) + "\",";
+  response += "\"status\":\"Professor acknowledges the request and will respond accordingly\"";
+  response += "}";
+
+  // Publish response with offline queuing support
+  bool success = publishWithQueue(MQTT_TOPIC_RESPONSES, response.c_str(), true);
+  if (success) {
+    if (mqttClient.connected()) {
+      DEBUG_PRINTLN("✅ ACKNOWLEDGE response sent successfully");
+      showResponseConfirmation("ACKNOWLEDGED", COLOR_BLUE);
+    } else {
+      DEBUG_PRINTLN("📥 ACKNOWLEDGE response queued (offline)");
+      showResponseConfirmation("QUEUED", COLOR_WARNING);
+    }
+  } else {
+    DEBUG_PRINTLN("❌ Failed to send/queue ACKNOWLEDGE response");
+    showResponseConfirmation("FAILED", COLOR_ERROR);
+  }
+
+  // Clear message
+  clearCurrentMessage();
+}
+
+void handleBusyButton() {
+  if (!messageDisplayed || currentMessage.isEmpty()) return;
+
+  DEBUG_PRINTLN("📤 Sending BUSY response to central terminal");
+
+  // Create busy response
+  String response = "{";
+  response += "\"faculty_id\":" + String(FACULTY_ID) + ",";
+  response += "\"faculty_name\":\"" + String(FACULTY_NAME) + "\",";
+  response += "\"response_type\":\"BUSY\",";
+  response += "\"message_id\":\"" + messageId + "\",";
+  response += "\"original_message\":\"" + currentMessage + "\",";
+  response += "\"timestamp\":\"" + String(millis()) + "\",";
+  response += "\"status\":\"Professor is currently busy and cannot cater to this request\"";
+  response += "}";
+
+  // Publish response with offline queuing support
+  bool success = publishWithQueue(MQTT_TOPIC_RESPONSES, response.c_str(), true);
+  if (success) {
+    if (mqttClient.connected()) {
+      DEBUG_PRINTLN("✅ BUSY response sent successfully");
+      showResponseConfirmation("MARKED BUSY", COLOR_ERROR);
+    } else {
+      DEBUG_PRINTLN("📥 BUSY response queued (offline)");
+      showResponseConfirmation("QUEUED", COLOR_WARNING);
+    }
+  } else {
+    DEBUG_PRINTLN("❌ Failed to send/queue BUSY response");
+    showResponseConfirmation("FAILED", COLOR_ERROR);
+  }
+
+  // Clear message
+  clearCurrentMessage();
+}
+
+void showResponseConfirmation(String confirmText, uint16_t color) {
+  // Clear main area
+  tft.fillRect(0, MAIN_AREA_Y, SCREEN_WIDTH, MAIN_AREA_HEIGHT, COLOR_WHITE);
+
+  // Show confirmation card
+  drawSimpleCard(20, STATUS_CENTER_Y - 30, 280, 60, color);
+
+  int confirmX = getCenterX(confirmText, 2);
+  tft.setCursor(confirmX, STATUS_CENTER_Y - 15);
+  tft.setTextSize(2);
+  tft.setTextColor(COLOR_WHITE);
+  tft.print(confirmText);
+
+  tft.setCursor(getCenterX("Response Sent", 1), STATUS_CENTER_Y + 10);
+  tft.setTextSize(1);
+  tft.setTextColor(COLOR_WHITE);
+  tft.print("Response Sent");
+
+  delay(CONFIRMATION_DISPLAY_TIME);
+}
+
+void clearCurrentMessage() {
+  currentMessage = "";
+  messageDisplayed = false;
+  messageDisplayStart = 0;
+  messageId = "";
+  updateMainDisplay(); // Return to normal display
+}
+
+// ================================
+// WIFI FUNCTIONS (UNCHANGED)
+// ================================
+void setupWiFi() {
+  DEBUG_PRINT("Connecting to WiFi: ");
+  DEBUG_PRINTLN(WIFI_SSID);
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  unsigned long startTime = millis();
+  while (WiFi.status() != WL_CONNECTED &&
+         (millis() - startTime) < WIFI_CONNECT_TIMEOUT) {
+    delay(500);
+    DEBUG_PRINT(".");
+    updateSystemStatus();
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnected = true;
+    DEBUG_PRINTLN(" connected!");
+    DEBUG_PRINT("IP address: ");
+    DEBUG_PRINTLN(WiFi.localIP());
+    setupTimeWithRetry();
+  } else {
+    wifiConnected = false;
+    DEBUG_PRINTLN(" failed!");
+  }
+  updateSystemStatus();
+}
+
+void checkWiFiConnection() {
+  if (WiFi.status() != WL_CONNECTED) {
+    if (wifiConnected) {
+      wifiConnected = false;
+      timeInitialized = false;
+      updateSystemStatus();
+    }
+
+    static unsigned long lastReconnectAttempt = 0;
+    if (millis() - lastReconnectAttempt > WIFI_RECONNECT_INTERVAL) {
+      WiFi.reconnect();
+      lastReconnectAttempt = millis();
+    }
+  } else if (!wifiConnected) {
+    wifiConnected = true;
+    setupTimeWithRetry();
+    updateSystemStatus();
+  }
+}
+
+// ================================
+// ENHANCED NTP TIME FUNCTIONS
+// ================================
+void setupTimeWithRetry() {
+  DEBUG_PRINTLN("Setting up enhanced NTP time synchronization...");
+  ntpSyncInProgress = true;
+  ntpRetryCount = 0;
+  ntpSyncStatus = "SYNCING";
+
+  // Try multiple NTP servers for better reliability
+  configTime(TIME_ZONE_OFFSET * 3600, 0, NTP_SERVER_PRIMARY, NTP_SERVER_SECONDARY, NTP_SERVER_TERTIARY);
+
+  unsigned long startTime = millis();
+  struct tm timeinfo;
+
+  while (!getLocalTime(&timeinfo) && (millis() - startTime) < NTP_SYNC_TIMEOUT) {
+    delay(1000);
+    DEBUG_PRINT(".");
+    updateSystemStatus(); // Update display during sync
+  }
+
+  if (getLocalTime(&timeinfo)) {
+    timeInitialized = true;
+    ntpSyncInProgress = false;
+    ntpSyncStatus = "SYNCED";
+    ntpRetryCount = 0;
+    DEBUG_PRINTLN(" Time synced successfully!");
+    DEBUG_PRINTF("Current time: %04d-%02d-%02d %02d:%02d:%02d\n",
+                timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    updateTimeAndDate();
+    updateSystemStatus();
+
+    // Publish NTP sync status to central system
+    publishNtpSyncStatus(true);
+  } else {
+    timeInitialized = false;
+    ntpSyncInProgress = false;
+    ntpSyncStatus = "FAILED";
+    ntpRetryCount++;
+    DEBUG_PRINTLN(" Time sync failed!");
+
+    // Publish NTP sync failure to central system
+    publishNtpSyncStatus(false);
+  }
+}
+
+void updateTimeAndDate() {
+  if (!wifiConnected) {
+    if (lastDisplayedTime != "OFFLINE") {
+      lastDisplayedTime = "OFFLINE";
+      lastDisplayedDate = "NO WIFI";
+
+      tft.fillRect(TIME_X, TIME_Y, 120, 15, COLOR_PANEL);
+      tft.setCursor(TIME_X, TIME_Y);
+      tft.setTextColor(COLOR_ERROR);
+      tft.setTextSize(1);
+      tft.print("TIME: OFFLINE");
+
+      tft.fillRect(DATE_X - 60, DATE_Y, 70, 15, COLOR_PANEL);
+      tft.setCursor(DATE_X - 60, DATE_Y);
+      tft.setTextColor(COLOR_ERROR);
+      tft.setTextSize(1);
+      tft.print("NO WIFI");
+    }
     return;
   }
 
-  const char* status_message;
-  String detailed_status;
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo) && timeInitialized) {
+    char timeStr[12];
+    strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
 
-  if (facultyPresent) {
-    status_message = "faculty_present";
-    detailed_status = String(FACULTY_NAME) + " detected via beacon: " + lastDetectedMac;
+    char dateStr[15];
+    strftime(dateStr, sizeof(dateStr), "%b %d, %Y", &timeinfo);
 
-    // Also send legacy format for backward compatibility
-    mqttClient.publish(mqtt_topic_status, "keychain_connected");
-    mqttClient.publish(mqtt_topic_legacy_status, "keychain_connected");
+    String currentTimeStr = String(timeStr);
+    String currentDateStr = String(dateStr);
 
-    Serial.print("Published ");
-    Serial.print(FACULTY_NAME);
-    Serial.println(" present status");
-    displaySystemStatus(String(FACULTY_NAME) + " Present");
-  } else {
-    status_message = "faculty_absent";
-    detailed_status = String(FACULTY_NAME) + " beacon not detected";
+    if (currentTimeStr != lastDisplayedTime) {
+      lastDisplayedTime = currentTimeStr;
 
-    // Also send legacy format for backward compatibility
-    mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
-    mqttClient.publish(mqtt_topic_legacy_status, "keychain_disconnected");
-
-    Serial.print("Published ");
-    Serial.print(FACULTY_NAME);
-    Serial.println(" absent status");
-    displaySystemStatus(String(FACULTY_NAME) + " Absent");
-  }
-
-  // Publish detailed status with MAC address information
-  String statusPayload = "{\"status\":\"" + String(status_message) + "\",\"mac\":\"" + lastDetectedMac + "\",\"timestamp\":" + String(millis()) + "}";
-
-  mqttClient.publish(mqtt_topic_mac_status, statusPayload.c_str());
-
-  Serial.print("Published detailed status: ");
-  Serial.println(statusPayload);
-}
-
-// Function to draw the continuous gold accent bar
-void drawGoldAccent() {
-  // Draw gold accent that spans the entire height except status bar
-  tft.fillRect(0, 0, ACCENT_WIDTH, tft.height() - STATUS_HEIGHT, COLOR_ACCENT);
-}
-
-// Centralized UI update function that preserves the gold accent
-void updateUIArea(int area, const String &message = "") {
-  // Area types:
-  // 0 = Full message area
-  // 1 = Message title area only
-  // 2 = Message content area only
-  // 3 = Status bar only
-
-  switch (area) {
-    case 0: // Full message area
-      // Clear the message area but preserve gold accent
-      tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP,
-                  tft.width() - ACCENT_WIDTH,
-                  tft.height() - MESSAGE_AREA_TOP - STATUS_HEIGHT,
-                  COLOR_MESSAGE_BG);
-
-      // Ensure gold accent is intact
-      drawGoldAccent();
-
-      // If message provided, display it
-      if (message.length() > 0) {
-        tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
-        tft.setTextSize(2);
-        tft.setTextColor(NU_GOLD);
-        tft.println(message);
-      }
-      break;
-
-    case 1: // Message title area only
-      // Clear just the title area
-      tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP,
-                  tft.width() - ACCENT_WIDTH,
-                  MESSAGE_TITLE_HEIGHT,
-                  COLOR_MESSAGE_BG);
-
-      // Ensure gold accent is intact
-      drawGoldAccent();
-
-      // If message provided, display it as title
-      if (message.length() > 0) {
-        tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
-        tft.setTextSize(2);
-        tft.setTextColor(NU_GOLD);
-        tft.println(message);
-      }
-      break;
-
-    case 2: // Message content area only
-      // Clear just the content area below title
-      tft.fillRect(ACCENT_WIDTH, MESSAGE_TEXT_TOP,
-                  tft.width() - ACCENT_WIDTH,
-                  tft.height() - MESSAGE_TEXT_TOP - STATUS_HEIGHT,
-                  COLOR_MESSAGE_BG);
-
-      // Ensure gold accent is intact
-      drawGoldAccent();
-      break;
-
-    case 3: // Status bar only
-      // Update status bar
-      displaySystemStatus(message);
-      break;
-  }
-}
-
-// Function to test the full display
-void testScreen() {
-  // Test pattern to verify the display is working properly
-  tft.fillScreen(NU_BLUE);
-  delay(500);
-
-  // Draw National University Philippines colors for test
-  int sectionHeight = tft.height() / 3;
-
-  // Draw sections with no gaps
-  tft.fillRect(0, 0, tft.width(), sectionHeight, NU_DARKBLUE);
-  tft.fillRect(0, sectionHeight, tft.width(), sectionHeight, NU_BLUE);
-  tft.fillRect(0, 2*sectionHeight, tft.width(), sectionHeight, NU_GOLD);
-
-  // Add continuous gold accent line at left
-  drawGoldAccent();
-
-  // Display text
-  tft.setTextColor(ST77XX_WHITE);
-  tft.setTextSize(2);
-
-  tft.setCursor(ACCENT_WIDTH + 5, 10);
-  tft.println("National University");
-
-  tft.setCursor(ACCENT_WIDTH + 5, sectionHeight + 10);
-  tft.println("Philippines");
-
-  tft.setTextColor(NU_DARKBLUE);
-  tft.setCursor(ACCENT_WIDTH + 5, 2*sectionHeight + 10);
-  tft.println("Professor's Desk Unit");
-
-  delay(3000);
-  tft.fillScreen(NU_BLUE);
-}
-
-// NTP Time Synchronization Functions
-void initializeNTP() {
-  Serial.println("Initializing NTP client...");
-  displaySystemStatus("Initializing NTP...");
-
-  timeClient.begin();
-  ntpInitialized = true;
-
-  // Try initial synchronization
-  syncTimeWithNTP();
-}
-
-bool syncTimeWithNTP() {
-  if (!ntpInitialized) {
-    Serial.println("NTP not initialized");
-    return false;
-  }
-
-  Serial.println("Attempting NTP time synchronization...");
-  displaySystemStatus("Syncing time...");
-
-  // Try primary NTP server
-  bool success = timeClient.update();
-
-  if (!success && ntpSyncAttempts < maxNtpSyncAttempts) {
-    Serial.println("Primary NTP server failed, trying alternative servers...");
-
-    // Try alternative servers
-    const char* servers[] = {ntpServer2, ntpServer3};
-    for (int i = 0; i < 2 && !success; i++) {
-      Serial.print("Trying NTP server: ");
-      Serial.println(servers[i]);
-
-      // Reinitialize with different server
-      timeClient.end();
-      timeClient = NTPClient(ntpUDP, servers[i], gmtOffset_sec, 60000);
-      timeClient.begin();
-
-      delay(1000); // Give time for initialization
-      success = timeClient.update();
+      tft.fillRect(TIME_X, TIME_Y, 120, 15, COLOR_PANEL);
+      tft.setCursor(TIME_X, TIME_Y);
+      tft.setTextColor(COLOR_ACCENT);
+      tft.setTextSize(1);
+      tft.print("TIME: ");
+      tft.print(timeStr);
     }
 
-    // If alternative servers failed, go back to primary
-    if (!success) {
-      timeClient.end();
-      timeClient = NTPClient(ntpUDP, ntpServer1, gmtOffset_sec, 60000);
-      timeClient.begin();
+    if (currentDateStr != lastDisplayedDate) {
+      lastDisplayedDate = currentDateStr;
+
+      tft.fillRect(DATE_X - 90, DATE_Y, 90, 15, COLOR_PANEL);
+      tft.setCursor(DATE_X - 90, DATE_Y);
+      tft.setTextColor(COLOR_ACCENT);
+      tft.setTextSize(1);
+      tft.print("DATE: ");
+      tft.print(dateStr);
+    }
+  } else {
+    if (lastDisplayedTime != "SYNCING") {
+      lastDisplayedTime = "SYNCING";
+      lastDisplayedDate = "SYNCING";
+
+      tft.fillRect(TIME_X, TIME_Y, 120, 15, COLOR_PANEL);
+      tft.setCursor(TIME_X, TIME_Y);
+      tft.setTextColor(COLOR_WARNING);
+      tft.setTextSize(1);
+      tft.print("TIME: SYNCING...");
+
+      tft.fillRect(DATE_X - 90, DATE_Y, 90, 15, COLOR_PANEL);
+      tft.setCursor(DATE_X - 90, DATE_Y);
+      tft.setTextColor(COLOR_WARNING);
+      tft.setTextSize(1);
+      tft.print("WAIT...");
     }
   }
-
-  if (success) {
-    // Get the epoch time from NTP
-    unsigned long epochTime = timeClient.getEpochTime();
-
-    // Set the system time using the built-in ESP32 time functions
-    struct timeval tv;
-    tv.tv_sec = epochTime;
-    tv.tv_usec = 0;
-    settimeofday(&tv, NULL);
-
-    // Also configure timezone for ESP32 internal clock
-    setenv("TZ", "PHT-8", 1); // Philippines Time UTC+8
-    tzset();
-
-    ntpSyncSuccessful = true;
-    lastNtpSync = millis();
-    ntpSyncAttempts = 0;
-
-    Serial.println("NTP synchronization successful!");
-    Serial.print("Current time: ");
-    Serial.println(timeClient.getFormattedTime());
-
-    displaySystemStatus("Time synced successfully");
-
-    // Show sync success indicator on display
-    showTimeSyncIndicator(true);
-
-    return true;
-  } else {
-    ntpSyncSuccessful = false;
-    ntpSyncAttempts++;
-
-    Serial.print("NTP synchronization failed (attempt ");
-    Serial.print(ntpSyncAttempts);
-    Serial.print("/");
-    Serial.print(maxNtpSyncAttempts);
-    Serial.println(")");
-
-    displaySystemStatus("Time sync failed");
-
-    // Show sync failure indicator on display
-    showTimeSyncIndicator(false);
-
-    return false;
-  }
-}
-
-void showTimeSyncIndicator(bool success) {
-  // Show a small indicator in the top-right corner of the header
-  int indicatorX = tft.width() - 25;
-  int indicatorY = 5;
-  int indicatorSize = 8;
-
-  if (success) {
-    // Green circle for successful sync
-    tft.fillCircle(indicatorX, indicatorY + indicatorSize/2, indicatorSize/2, ST77XX_GREEN);
-    tft.drawCircle(indicatorX, indicatorY + indicatorSize/2, indicatorSize/2, COLOR_TEXT);
-  } else {
-    // Red circle for failed sync
-    tft.fillCircle(indicatorX, indicatorY + indicatorSize/2, indicatorSize/2, ST77XX_RED);
-    tft.drawCircle(indicatorX, indicatorY + indicatorSize/2, indicatorSize/2, COLOR_TEXT);
-  }
-
-  // Show indicator for 3 seconds
-  delay(3000);
-
-  // Clear the indicator area and redraw header
-  tft.fillRect(indicatorX - indicatorSize, indicatorY, indicatorSize * 2, indicatorSize + 5, COLOR_HEADER);
 }
 
 void checkPeriodicTimeSync() {
-  unsigned long currentTime = millis();
+  static unsigned long lastNTPSync = 0;
+  unsigned long now = millis();
 
-  // Check if it's time for periodic sync
-  if (ntpSyncSuccessful && (currentTime - lastNtpSync > ntpSyncInterval)) {
-    Serial.println("Performing periodic NTP synchronization...");
-    syncTimeWithNTP();
-  }
-  // If last sync failed, retry more frequently
-  else if (!ntpSyncSuccessful && (currentTime - lastNtpSync > ntpSyncRetryInterval)) {
-    Serial.println("Retrying NTP synchronization...");
-    syncTimeWithNTP();
-  }
-}
+  // Periodic sync for already synchronized time
+  if (timeInitialized && wifiConnected && (now - lastNTPSync > NTP_UPDATE_INTERVAL)) {
+    DEBUG_PRINTLN("Performing periodic NTP sync...");
+    ntpSyncInProgress = true;
+    ntpSyncStatus = "SYNCING";
 
-String getFormattedTime() {
-  if (ntpSyncSuccessful && ntpInitialized) {
-    // Use NTP synchronized time
-    timeClient.update(); // Update to get latest time
-    return timeClient.getFormattedTime();
-  } else {
-    // Fallback to ESP32 internal RTC
+    configTime(TIME_ZONE_OFFSET * 3600, 0, NTP_SERVER_PRIMARY, NTP_SERVER_SECONDARY);
+
+    // Quick check for sync success
+    delay(2000);
     struct tm timeinfo;
     if (getLocalTime(&timeinfo)) {
-      char timeStr[10];
-      strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
-      return String(timeStr);
+      ntpSyncStatus = "SYNCED";
+      DEBUG_PRINTLN("Periodic NTP sync successful");
+      publishNtpSyncStatus(true);
     } else {
-      // Last resort: use hardcoded time
-      String dateTime = String(current_date_time);
-      return dateTime.substring(11); // Extract time part
+      ntpSyncStatus = "FAILED";
+      DEBUG_PRINTLN("Periodic NTP sync failed");
+      publishNtpSyncStatus(false);
     }
+
+    ntpSyncInProgress = false;
+    lastNTPSync = now;
+  }
+
+  // Retry failed sync attempts
+  if (!timeInitialized && wifiConnected && !ntpSyncInProgress &&
+      (now - lastNtpSyncAttempt > NTP_RETRY_INTERVAL) &&
+      ntpRetryCount < NTP_MAX_RETRIES) {
+    DEBUG_PRINTF("Retrying NTP sync (attempt %d/%d)...\n", ntpRetryCount + 1, NTP_MAX_RETRIES);
+    lastNtpSyncAttempt = now;
+    setupTimeWithRetry();
   }
 }
 
-String getFormattedDate() {
-  if (ntpSyncSuccessful && ntpInitialized) {
-    // Use NTP synchronized time
-    time_t epochTime = timeClient.getEpochTime();
-    struct tm *ptm = gmtime(&epochTime);
+// ================================
+// MQTT FUNCTIONS (UNCHANGED)
+// ================================
+void setupMQTT() {
+  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+  mqttClient.setCallback(onMqttMessage);
+  mqttClient.setKeepAlive(MQTT_KEEPALIVE);
+}
 
-    char dateStr[12];
-    sprintf(dateStr, "%04d-%02d-%02d",
-            ptm->tm_year + 1900,
-            ptm->tm_mon + 1,
-            ptm->tm_mday);
-    return String(dateStr);
+void connectMQTT() {
+  if (millis() - lastMqttReconnect < 5000) return;
+  lastMqttReconnect = millis();
+
+  DEBUG_PRINT("MQTT connecting...");
+
+  if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD)) {
+    mqttConnected = true;
+    DEBUG_PRINTLN(" connected!");
+    mqttClient.subscribe(MQTT_TOPIC_MESSAGES, MQTT_QOS);
+    publishPresenceUpdate();
+    updateSystemStatus();
   } else {
-    // Fallback to ESP32 internal RTC
-    struct tm timeinfo;
-    if (getLocalTime(&timeinfo)) {
-      char dateStr[12];
-      strftime(dateStr, sizeof(dateStr), "%Y-%m-%d", &timeinfo);
-      return String(dateStr);
-    } else {
-      // Last resort: use hardcoded date
-      String dateTime = String(current_date_time);
-      return dateTime.substring(0, 10); // Extract date part
-    }
+    mqttConnected = false;
+    DEBUG_PRINTLN(" failed!");
+    updateSystemStatus();
   }
 }
 
-// Function to draw the header with time and date
-void updateTimeDisplay() {
-  // Clear only the header area, preserving the gold accent
-  tft.fillRect(ACCENT_WIDTH, 0, tft.width() - ACCENT_WIDTH, HEADER_HEIGHT, COLOR_HEADER);
-
-  // Get current time using NTP-synchronized time
-  String timeStr = getFormattedTime();
-  String dateStr = getFormattedDate();
-
-  // Convert time from HH:MM:SS to HH:MM for display
-  if (timeStr.length() >= 5) {
-    timeStr = timeStr.substring(0, 5); // Extract HH:MM
+void onMqttMessage(char* topic, byte* payload, unsigned int length) {
+  // Bounds checking for security
+  if (length > MAX_MESSAGE_LENGTH) {
+    DEBUG_PRINTF("⚠️ Message too long (%d bytes), truncating to %d\n", length, MAX_MESSAGE_LENGTH);
+    length = MAX_MESSAGE_LENGTH;
   }
-
-  // Convert date from YYYY-MM-DD to MM/DD/YYYY for display
-  if (dateStr.length() >= 10) {
-    String year = dateStr.substring(0, 4);
-    String month = dateStr.substring(5, 7);
-    String day = dateStr.substring(8, 10);
-    dateStr = month + "/" + day + "/" + year;
-  }
-
-  // Draw time on left
-  tft.setTextColor(COLOR_TEXT);
-  tft.setTextSize(2);
-  tft.setCursor(ACCENT_WIDTH + 5, 10);
-  tft.print(timeStr);
-
-  // Draw date on right
-  int16_t x1, y1;
-  uint16_t w, h;
-  tft.getTextBounds(dateStr, 0, 0, &x1, &y1, &w, &h);
-  tft.setCursor(tft.width() - w - 10, 10);
-  tft.print(dateStr);
-
-  // Show time sync status indicator (small dot in top-right corner)
-  int statusX = tft.width() - 15;
-  int statusY = 8;
-
-  if (ntpSyncSuccessful) {
-    // Green dot for successful NTP sync
-    tft.fillCircle(statusX, statusY, 3, ST77XX_GREEN);
-  } else {
-    // Orange dot for fallback time (no NTP sync)
-    tft.fillCircle(statusX, statusY, 3, ST77XX_ORANGE);
-  }
-
-  // Ensure gold accent is intact
-  drawGoldAccent();
-}
-
-// Function to display a new message
-void displayMessage(String message) {
-  // Use centralized UI update function to clear the full message area
-  updateUIArea(0);
-
-  // Display "New Message:" title with gold accent
-  tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 5);
-  tft.setTextColor(COLOR_ACCENT);  // Gold color for title
-  tft.setTextSize(2);
-  tft.println("New Message:");
-
-  // Draw a gold divider line right after the title
-  tft.drawFastHLine(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + MESSAGE_TITLE_HEIGHT - 5, tft.width() - ACCENT_WIDTH - 10, COLOR_ACCENT);
-
-  // Display message text with word wrapping
-  tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_TEXT_TOP);
-  tft.setTextColor(COLOR_TEXT);  // White text for message
-  tft.setTextSize(2);
-
-  // Handle long messages with line wrapping
-  int16_t x1, y1;
-  uint16_t w, h;
-  int maxWidth = tft.width() - ACCENT_WIDTH - 10;
-  String line = "";
-  int yPos = MESSAGE_TEXT_TOP;
-
-  for (int i = 0; i < message.length(); i++) {
-    char c = message.charAt(i);
-    line += c;
-
-    tft.getTextBounds(line, 0, 0, &x1, &y1, &w, &h);
-
-    if (w > maxWidth || c == '\n') {
-      // Remove the last character if it was due to width
-      if (w > maxWidth && c != '\n')
-        line = line.substring(0, line.length() - 1);
-
-      tft.setCursor(ACCENT_WIDTH + 5, yPos);
-      tft.println(line);
-
-      yPos += h + 2;  // Reduced spacing for more compact layout
-      line = (w > maxWidth && c != '\n') ? String(c) : "";
-    }
-  }
-
-  // Print any remaining text
-  if (line.length() > 0) {
-    tft.setCursor(ACCENT_WIDTH + 5, yPos);
-    tft.println(line);
-  }
-
-  lastMessage = message;
-}
-
-// Show system status on display
-void displaySystemStatus(String status) {
-  // Clear the status area at the bottom of the screen
-  tft.fillRect(0, tft.height() - STATUS_HEIGHT, tft.width(), STATUS_HEIGHT, NU_DARKBLUE);
-
-  // Display the status text
-  tft.setCursor(ACCENT_WIDTH + 5, tft.height() - STATUS_HEIGHT + 5);
-  tft.setTextColor(COLOR_STATUS_GOOD);
-  tft.setTextSize(1);
-  tft.println(status);
-
-  // Draw a gold line above status bar
-  tft.drawFastHLine(0, tft.height() - STATUS_HEIGHT, tft.width(), COLOR_ACCENT);
-}
-
-// MQTT callback with improved topic handling
-void callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
 
   String message = "";
-  for (int i = 0; i < length; i++) {
+  message.reserve(length + 1);  // Pre-allocate memory
+
+  for (unsigned int i = 0; i < length; i++) {
     message += (char)payload[i];
   }
 
-  Serial.println(message);
+  DEBUG_PRINTF("📨 Message received (%d bytes): %s\n", length, message.c_str());
 
-  // Enhanced debug output
-  Serial.println("Message details:");
-  Serial.print("Topic: ");
-  Serial.println(topic);
-  Serial.print("Length: ");
-  Serial.println(length);
-  Serial.print("Content: ");
-  Serial.println(message);
-
-  // Check if this is a system ping message (for keeping connection alive)
-  if (strcmp(topic, MQTT_TOPIC_NOTIFICATIONS) == 0 && message.indexOf("ping") >= 0) {
-    Serial.println("Received system ping, no need to display");
-    return;
+  if (presenceDetector.getPresence()) {
+    // Generate message ID for tracking
+    messageId = String(millis()) + "_" + String(random(1000, 9999));
+    lastReceivedMessage = message;
+    displayIncomingMessage(message);
+  } else {
+    DEBUG_PRINTLN("📭 Message ignored - Professor is AWAY");
   }
-
-  // Process the message based on format
-  message = processMessage(message);
-
-  // Display the message on TFT with visual notification
-  displayMessage(message);
-  displaySystemStatus("New message received");
-
-  // Flash the screen briefly to draw attention to the new message
-  for (int i = 0; i < 3; i++) {
-    // Flash the header area
-    tft.fillRect(ACCENT_WIDTH, 0, tft.width() - ACCENT_WIDTH, HEADER_HEIGHT, COLOR_ACCENT);
-    delay(100);
-    tft.fillRect(ACCENT_WIDTH, 0, tft.width() - ACCENT_WIDTH, HEADER_HEIGHT, COLOR_HEADER);
-    delay(100);
-  }
-
-  // Restore the time display
-  updateTimeDisplay();
 }
 
-// Draw the main UI framework - truly seamless design
-void drawUIFramework() {
-  // Fill entire screen with the NU blue color
+void publishPresenceUpdate() {
+  String payload = "{";
+  payload += "\"faculty_id\":" + String(FACULTY_ID) + ",";
+  payload += "\"faculty_name\":\"" + String(FACULTY_NAME) + "\",";
+  payload += "\"present\":" + String(presenceDetector.getPresence() ? "true" : "false") + ",";
+  payload += "\"status\":\"" + presenceDetector.getStatusString() + "\",";
+  payload += "\"timestamp\":" + String(millis()) + ",";
+  payload += "\"ntp_sync_status\":\"" + ntpSyncStatus + "\"";
+
+  // Add grace period information for debugging
+  if (presenceDetector.isInGracePeriod()) {
+    payload += ",\"grace_period_remaining\":" + String(presenceDetector.getGracePeriodRemaining());
+    payload += ",\"in_grace_period\":true";
+  } else {
+    payload += ",\"in_grace_period\":false";
+  }
+
+  // Add detailed status for central system
+  payload += ",\"detailed_status\":\"" + presenceDetector.getDetailedStatus() + "\"";
+
+  payload += "}";
+
+  // Publish with offline queuing support
+  bool success1 = publishWithQueue(MQTT_TOPIC_STATUS, payload.c_str(), false);
+  bool success2 = publishWithQueue(MQTT_LEGACY_STATUS, payload.c_str(), false);
+
+  if (success1 || success2) {
+    if (mqttClient.connected()) {
+      DEBUG_PRINTF("📡 Published presence update: %s\n", presenceDetector.getStatusString().c_str());
+    } else {
+      DEBUG_PRINTF("📥 Queued presence update: %s\n", presenceDetector.getStatusString().c_str());
+    }
+  } else {
+    DEBUG_PRINTLN("❌ Failed to send/queue presence update");
+  }
+}
+
+void publishNtpSyncStatus(bool success) {
+  if (!mqttClient.connected()) return;
+
+  String payload = "{";
+  payload += "\"faculty_id\":" + String(FACULTY_ID) + ",";
+  payload += "\"ntp_sync_success\":" + String(success ? "true" : "false") + ",";
+  payload += "\"ntp_sync_status\":\"" + ntpSyncStatus + "\",";
+  payload += "\"retry_count\":" + String(ntpRetryCount) + ",";
+  payload += "\"timestamp\":" + String(millis());
+
+  if (success && timeInitialized) {
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+      char timeStr[32];
+      strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
+      payload += ",\"current_time\":\"" + String(timeStr) + "\"";
+    }
+  }
+
+  payload += "}";
+
+  mqttClient.publish(MQTT_TOPIC_HEARTBEAT, payload.c_str(), MQTT_QOS);
+  DEBUG_PRINTF("📡 Published NTP sync status: %s\n", success ? "SUCCESS" : "FAILED");
+}
+
+void publishHeartbeat() {
+  if (!mqttClient.connected()) return;
+
+  String payload = "{";
+  payload += "\"faculty_id\":" + String(FACULTY_ID) + ",";
+  payload += "\"uptime\":" + String(millis()) + ",";
+  payload += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
+  payload += "\"wifi_connected\":" + String(wifiConnected ? "true" : "false") + ",";
+  payload += "\"time_initialized\":" + String(timeInitialized ? "true" : "false") + ",";
+  payload += "\"ntp_sync_status\":\"" + ntpSyncStatus + "\",";
+  payload += "\"presence_status\":\"" + presenceDetector.getStatusString() + "\"";
+  payload += "}";
+
+  mqttClient.publish(MQTT_TOPIC_HEARTBEAT, payload.c_str());
+}
+
+// ================================
+// BLE FUNCTIONS (UNCHANGED)
+// ================================
+void setupBLE() {
+  DEBUG_PRINTLN("Initializing BLE...");
+
+  BLEDevice::init("");
+  pBLEScan = BLEDevice::getScan();
+  pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
+  pBLEScan->setActiveScan(true);
+  pBLEScan->setInterval(100);
+  pBLEScan->setWindow(99);
+
+  DEBUG_PRINTLN("BLE ready");
+}
+
+// ================================
+// DISPLAY FUNCTIONS (UNCHANGED - Your existing display logic!)
+// ================================
+void setupDisplay() {
+  tft.init(240, 320);
+  tft.setRotation(3);
+  tft.fillScreen(COLOR_WHITE);
+
+  DEBUG_PRINTLN("Display initialized - With Grace Period BLE System");
+
   tft.fillScreen(COLOR_BACKGROUND);
 
-  // Draw the header bar with darker blue - no gaps
-  tft.fillRect(ACCENT_WIDTH, 0, tft.width() - ACCENT_WIDTH, HEADER_HEIGHT, COLOR_HEADER);
+  tft.setCursor(getCenterX("NU FACULTY", 3), 100);
+  tft.setTextColor(COLOR_ACCENT);
+  tft.setTextSize(3);
+  tft.print("NU FACULTY");
 
-  // Draw status bar area - seamless with main area
-  tft.fillRect(0, tft.height() - STATUS_HEIGHT, tft.width(), STATUS_HEIGHT, NU_DARKBLUE);
-
-  // Add thin gold accent line above status bar
-  tft.drawFastHLine(0, tft.height() - STATUS_HEIGHT, tft.width(), COLOR_ACCENT);
-
-  // Draw continuous gold accent at left
-  drawGoldAccent();
-}
-
-void setup_wifi() {
-  // Clear the main content area but preserve the gold accent bar
-  tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, tft.height() - MESSAGE_AREA_TOP - STATUS_HEIGHT, COLOR_BACKGROUND);
-
-  // Ensure gold accent is intact
-  drawGoldAccent();
-
-  // Display connecting message
-  tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
-  tft.setTextColor(COLOR_TEXT);
+  tft.setCursor(getCenterX("DESK UNIT", 2), 130);
   tft.setTextSize(2);
-  tft.println("Connecting to WiFi");
-
-  // Add the SSID right beneath
-  tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 40);
-  tft.setTextSize(1);
-  tft.println(ssid);
-
-  // Connect to WiFi
-  delay(10);
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-
-  WiFi.begin(ssid, password);
-
-  // Animated connecting indicator with National University colors
-  int dots = 0;
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-
-    // Clear dot area but preserve gold accent
-    tft.fillRect(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 60, tft.width() - ACCENT_WIDTH - 10, 20, COLOR_BACKGROUND);
-
-    // Update dots animation with alternating colors
-    tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 60);
-    tft.setTextColor(COLOR_TEXT);
-    tft.print("Connecting");
-
-    for (int i = 0; i < 6; i++) {
-      if (i < dots) {
-        // Alternate between blue and gold dots
-        tft.setTextColor((i % 2 == 0) ? NU_GOLD : NU_LIGHTGOLD);
-        tft.print(".");
-      } else {
-        tft.print(" ");
-      }
-    }
-
-    dots = (dots + 1) % 7;
-  }
-
-  // Connected - display connection details
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-
-  // Clear the connecting message and show success - but preserve gold accent bar
-  tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, tft.height() - MESSAGE_AREA_TOP - STATUS_HEIGHT, COLOR_BACKGROUND);
-
-  // Ensure gold accent is intact
-  drawGoldAccent();
-
-  // Show connected message
-  tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
-  tft.setTextSize(2);
-  tft.setTextColor(NU_GOLD);
-  tft.println("WiFi Connected");
-
-  // Show network details
-  tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 50);
-  tft.setTextSize(1);
   tft.setTextColor(COLOR_TEXT);
-  tft.print("SSID: ");
-  tft.println(ssid);
+  tft.print("DESK UNIT");
 
-  tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 70);
-  tft.print("IP: ");
-  tft.println(WiFi.localIP().toString());
+  tft.setCursor(getCenterX("Grace Period BLE", 1), 160);
+  tft.setTextSize(1);
+  tft.setTextColor(COLOR_ACCENT);
+  tft.print("Grace Period BLE");
 
-  // Update status bar
-  displaySystemStatus("WiFi connected successfully");
-
-  // Give time to read the info
   delay(2000);
 }
 
-void reconnect() {
-  // Loop until we're reconnected to MQTT broker
-  int attempts = 0;
+void drawCompleteUI() {
+  tft.fillScreen(COLOR_BACKGROUND);
 
-  while (!mqttClient.connected() && attempts < 5) {
-    Serial.print("Attempting MQTT connection...");
-    displaySystemStatus("Connecting to MQTT...");
+  tft.fillRect(0, TOP_PANEL_Y, SCREEN_WIDTH, TOP_PANEL_HEIGHT, COLOR_PANEL);
 
-    // Create a client ID using the user's login
-    String clientId = mqtt_client_id;
-    clientId += String(random(0xffff), HEX);
+  tft.setCursor(PROFESSOR_NAME_X, PROFESSOR_NAME_Y);
+  tft.setTextColor(COLOR_ACCENT);
+  tft.setTextSize(1);
+  tft.print("PROFESSOR: ");
+  tft.setTextSize(1);
+  tft.print(FACULTY_NAME);
 
-    // Attempt to connect with authentication if credentials are provided
-    bool connected = false;
-    if (strlen(MQTT_USERNAME) > 0 && strlen(MQTT_PASSWORD) > 0) {
-      Serial.println("Connecting with MQTT authentication...");
-      connected = mqttClient.connect(clientId.c_str(), MQTT_USERNAME, MQTT_PASSWORD);
-    } else {
-      Serial.println("Connecting without MQTT authentication...");
-      connected = mqttClient.connect(clientId.c_str());
-    }
+  tft.setCursor(DEPARTMENT_X, DEPARTMENT_Y);
+  tft.setTextColor(COLOR_ACCENT);
+  tft.setTextSize(1);
+  tft.print("DEPARTMENT: ");
+  tft.print(FACULTY_DEPARTMENT);
 
-    if (connected) {
-      Serial.println("connected");
-      displaySystemStatus("MQTT connected");
-      // Subscribe to message topics (both standardized and legacy topics)
-      mqttClient.subscribe(mqtt_topic_messages);
-      mqttClient.subscribe(mqtt_topic_legacy_messages);
+  tft.fillRect(0, STATUS_PANEL_Y, SCREEN_WIDTH, STATUS_PANEL_HEIGHT, COLOR_PANEL_DARK);
+  tft.fillRect(0, BOTTOM_PANEL_Y, SCREEN_WIDTH, BOTTOM_PANEL_HEIGHT, COLOR_PANEL);
 
-      // Also subscribe to system notifications for ping messages
-      mqttClient.subscribe(MQTT_TOPIC_NOTIFICATIONS);
+  updateTimeAndDate();
+  updateMainDisplay();
+  updateSystemStatus();
+}
 
-      Serial.println("Subscribed to topics:");
-      Serial.println(mqtt_topic_messages);
-      Serial.println(mqtt_topic_legacy_messages);
-      Serial.println(MQTT_TOPIC_NOTIFICATIONS);
+void updateMainDisplay() {
+  tft.fillRect(0, MAIN_AREA_Y, SCREEN_WIDTH, MAIN_AREA_HEIGHT, COLOR_WHITE);
 
-      // Display a brief confirmation in message area - preserve gold accent
-      tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, 40, COLOR_MESSAGE_BG);
+  if (presenceDetector.getPresence()) {
+    drawSimpleCard(20, STATUS_CENTER_Y - 40, 280, 70, COLOR_PANEL);
 
-      // Ensure gold accent is intact
-      drawGoldAccent();
+    int availableX = getCenterX("AVAILABLE", 4);
+    tft.setCursor(availableX, STATUS_CENTER_Y - 25);
+    tft.setTextSize(4);
+    tft.setTextColor(COLOR_SUCCESS);
+    tft.print("AVAILABLE");
 
-      tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
-      tft.setTextSize(2);
-      tft.setTextColor(COLOR_ACCENT);
-      tft.println("MQTT Connected");
-      delay(1000);
+    int subtitleX = getCenterX("Ready for Consultation", 2);
+    tft.setCursor(subtitleX, STATUS_CENTER_Y + 5);
+    tft.setTextSize(2);
+    tft.setTextColor(COLOR_ACCENT);
+    tft.print("Ready for Consultation");
 
-      // Clear message but preserve gold accent
-      tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, 40, COLOR_MESSAGE_BG);
-      drawGoldAccent();
-    } else {
-      Serial.print("failed, rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(" try again in 5 seconds");
-      displaySystemStatus("MQTT connection failed. Retrying...");
-      delay(5000);
-      attempts++;
-    }
-  }
+    drawStatusIndicator(STATUS_CENTER_X, STATUS_CENTER_Y + 50, true);
 
-  if (!mqttClient.connected()) {
-    displaySystemStatus("Failed to connect to MQTT after multiple attempts");
+  } else {
+    drawSimpleCard(20, STATUS_CENTER_Y - 40, 280, 70, COLOR_GRAY_LIGHT);
+
+    int awayX = getCenterX("AWAY", 4);
+    tft.setCursor(awayX, STATUS_CENTER_Y - 25);
+    tft.setTextSize(4);
+    tft.setTextColor(COLOR_ERROR);
+    tft.print("AWAY");
+
+    int notAvailableX = getCenterX("Not Available", 2);
+    tft.setCursor(notAvailableX, STATUS_CENTER_Y + 5);
+    tft.setTextSize(2);
+    tft.setTextColor(COLOR_WHITE);
+    tft.print("Not Available");
+
+    drawStatusIndicator(STATUS_CENTER_X, STATUS_CENTER_Y + 50, false);
   }
 }
 
-void drawNULogo(int centerX, int centerY, int size) {
-  // Draw a simplified NU logo
-  int circleSize = size;
-  int innerSize1 = size * 0.8;
-  int innerSize2 = size * 0.6;
-  int innerSize3 = size * 0.4;
+void updateSystemStatus() {
+  tft.fillRect(2, STATUS_PANEL_Y + 1, SCREEN_WIDTH - 4, STATUS_PANEL_HEIGHT - 2, COLOR_PANEL_DARK);
 
-  // Outer gold circle
-  tft.fillCircle(centerX, centerY, circleSize, NU_GOLD);
+  int topLineY = STATUS_PANEL_Y + 3;
 
-  // Inner blue circle
-  tft.fillCircle(centerX, centerY, innerSize1, NU_DARKBLUE);
+  tft.setCursor(10, topLineY);
+  tft.setTextColor(COLOR_ACCENT);
+  tft.setTextSize(1);
+  tft.print("WiFi:");
+  if (wifiConnected) {
+    tft.setTextColor(COLOR_SUCCESS);
+    tft.print("CONNECTED");
+  } else {
+    tft.setTextColor(COLOR_ERROR);
+    tft.print("FAILED");
+  }
 
-  // White middle ring
-  tft.fillCircle(centerX, centerY, innerSize2, ST77XX_WHITE);
+  tft.setCursor(120, topLineY);
+  tft.setTextColor(COLOR_ACCENT);
+  tft.print("MQTT:");
+  if (mqttConnected) {
+    tft.setTextColor(COLOR_SUCCESS);
+    tft.print("ONLINE");
+  } else {
+    tft.setTextColor(COLOR_ERROR);
+    tft.print("OFFLINE");
+  }
 
-  // Blue inner circle
-  tft.fillCircle(centerX, centerY, innerSize3, NU_BLUE);
+  tft.setCursor(230, topLineY);
+  tft.setTextColor(COLOR_ACCENT);
+  tft.print("BLE:");
+  tft.setTextColor(COLOR_SUCCESS);
+  tft.print("ACTIVE");
 
-  // Add "NU" text in the center
-  tft.setTextColor(NU_GOLD);
+  int bottomLineY = STATUS_PANEL_Y + 15;
+
+  tft.setCursor(10, bottomLineY);
+  tft.setTextColor(COLOR_ACCENT);
+  tft.print("TIME:");
+  if (timeInitialized) {
+    tft.setTextColor(COLOR_SUCCESS);
+    tft.print("SYNCED");
+  } else if (ntpSyncInProgress) {
+    tft.setTextColor(COLOR_WARNING);
+    tft.print("SYNCING");
+  } else if (ntpSyncStatus == "FAILED") {
+    tft.setTextColor(COLOR_ERROR);
+    tft.print("FAILED");
+  } else {
+    tft.setTextColor(COLOR_WARNING);
+    tft.print("PENDING");
+  }
+
+  tft.setCursor(120, bottomLineY);
+  tft.setTextColor(COLOR_ACCENT);
+  tft.print("RAM:");
+  int freeHeapKB = ESP.getFreeHeap() / 1024;
+  tft.printf("%dKB", freeHeapKB);
+
+  tft.setCursor(200, bottomLineY);
+  tft.setTextColor(COLOR_ACCENT);
+  tft.print("UPTIME:");
+  unsigned long uptimeMinutes = millis() / 60000;
+  if (uptimeMinutes < 60) {
+    tft.printf("%dm", uptimeMinutes);
+  } else {
+    tft.printf("%dh%dm", uptimeMinutes / 60, uptimeMinutes % 60);
+  }
+}
+
+// ================================
+// MESSAGE DISPLAY WITH BUTTONS (UNCHANGED)
+// ================================
+void displayIncomingMessage(String message) {
+  currentMessage = message;
+  messageDisplayed = true;
+  messageDisplayStart = millis();
+
+  // Clear main area
+  tft.fillRect(0, MAIN_AREA_Y, SCREEN_WIDTH, MAIN_AREA_HEIGHT, COLOR_PANEL);
+
+  // Message header
+  drawSimpleCard(10, MAIN_AREA_Y + 5, SCREEN_WIDTH - 20, 25, COLOR_ACCENT);
+
+  int newMessageX = getCenterX("NEW MESSAGE", 2);
+  tft.setCursor(newMessageX, MAIN_AREA_Y + 12);
+  tft.setTextColor(COLOR_BACKGROUND);
+  tft.setTextSize(2);
+  tft.print("NEW MESSAGE");
+
+  // Message content area
+  tft.setCursor(15, MAIN_AREA_Y + 40);
+  tft.setTextColor(COLOR_TEXT);
   tft.setTextSize(1);
 
-  // Center the text in the logo
-  tft.setCursor(centerX - 5, centerY - 3);
-  tft.print("NU");
+  int lineHeight = 10;
+  int maxCharsPerLine = 40;
+  int currentY = MAIN_AREA_Y + 40;
+
+  // Display message with word wrapping
+  for (int i = 0; i < message.length(); i += maxCharsPerLine) {
+    String line = message.substring(i, min(i + maxCharsPerLine, (int)message.length()));
+    tft.setCursor(15, currentY);
+    tft.print(line);
+    currentY += lineHeight;
+
+    if (currentY > MAIN_AREA_Y + 85) break; // Leave space for buttons
+  }
+
+  // Button instructions
+  drawSimpleCard(10, MAIN_AREA_Y + 95, 145, 35, COLOR_BLUE_BG);
+  drawSimpleCard(165, MAIN_AREA_Y + 95, 145, 35, COLOR_ERROR_BG);
+
+  // Blue button (Acknowledge)
+  tft.setCursor(15, MAIN_AREA_Y + 102);
+  tft.setTextColor(COLOR_WHITE);
+  tft.setTextSize(1);
+  tft.print("BLUE BUTTON:");
+  tft.setCursor(15, MAIN_AREA_Y + 115);
+  tft.print("ACKNOWLEDGE");
+
+  // Red button (Busy)
+  tft.setCursor(170, MAIN_AREA_Y + 102);
+  tft.setTextColor(COLOR_WHITE);
+  tft.setTextSize(1);
+  tft.print("RED BUTTON:");
+  tft.setCursor(170, MAIN_AREA_Y + 115);
+  tft.print("BUSY");
+
+  DEBUG_PRINTF("📱 Message displayed with buttons. Message ID: %s\n", messageId.c_str());
 }
 
+// ================================
+// MAIN SETUP FUNCTION
+// ================================
 void setup() {
-  Serial.begin(115200);
-  Serial.println("Starting National University Philippines Desk Unit");
-  Serial.print("Current user: ");
-  Serial.println(current_user);
-  Serial.print("Current time: ");
-  Serial.println(current_date_time);
+  if (ENABLE_SERIAL_DEBUG) {
+    Serial.begin(SERIAL_BAUD_RATE);
+    while (!Serial && millis() < 3000);
+  }
 
-  // Initialize MQTT topics with faculty ID - both standardized and legacy
-  sprintf(mqtt_topic_messages, MQTT_TOPIC_REQUESTS, FACULTY_ID);
-  sprintf(mqtt_topic_status, MQTT_TOPIC_STATUS, FACULTY_ID);
-  sprintf(mqtt_topic_mac_status, MQTT_TOPIC_MAC_STATUS, FACULTY_ID);
-  strcpy(mqtt_topic_legacy_messages, MQTT_LEGACY_MESSAGES);
-  strcpy(mqtt_topic_legacy_status, MQTT_LEGACY_STATUS);
-  sprintf(mqtt_client_id, "DeskUnit_%s", FACULTY_NAME);
+  DEBUG_PRINTLN("=== NU FACULTY DESK UNIT - GRACE PERIOD BLE ===");
+  DEBUG_PRINTLN("=== May 29, 2025 - 23:27 (Philippines) ===");
+  DEBUG_PRINTLN("=== WITH 1-MINUTE GRACE PERIOD SYSTEM ===");
 
-  Serial.println("MQTT topics initialized:");
-  Serial.print("Standard messages topic: ");
-  Serial.println(mqtt_topic_messages);
-  Serial.print("Standard status topic: ");
-  Serial.println(mqtt_topic_status);
-  Serial.print("Legacy messages topic: ");
-  Serial.println(mqtt_topic_legacy_messages);
-  Serial.print("Legacy status topic: ");
-  Serial.println(mqtt_topic_legacy_status);
-  Serial.print("Client ID: ");
-  Serial.println(mqtt_client_id);
+  if (!validateConfiguration()) {
+    while(true) delay(5000);
+  }
 
-  // Initialize SPI communication
-  SPI.begin();
+  DEBUG_PRINTF("Faculty: %s\n", FACULTY_NAME);
+  DEBUG_PRINTF("Department: %s\n", FACULTY_DEPARTMENT);
+  DEBUG_PRINTF("iBeacon: %s\n", FACULTY_BEACON_MAC);
+  DEBUG_PRINTF("WiFi: %s\n", WIFI_SSID);
+  DEBUG_PRINTF("Grace Period: %d seconds\n", BLE_GRACE_PERIOD_MS / 1000);
 
-  // Initialize ST7789 display (240x320)
-  tft.init(240, 320); // Initialize the display with its dimensions
+  // Initialize offline operation system
+  DEBUG_PRINTLN("🔄 Initializing offline operation system...");
+  initOfflineQueue();
 
-  Serial.println("Display initialized");
+  // Initialize components
+  buttons.init();
+  setupDisplay();
+  setupWiFi();
 
-  // Set rotation for landscape orientation
-  tft.setRotation(1);
+  if (wifiConnected) {
+    setupMQTT();
+  }
 
-  // Run screen test to check if display is working correctly
-  testScreen();
+  setupBLE();
+  adaptiveScanner.init(&presenceDetector);  // Pass reference to presence detector
 
-  // Setup the basic UI framework - truly seamless design
-  drawUIFramework();
-
-  // Show current time/date in header
-  updateTimeDisplay();
-
-  // Show initial status
-  displaySystemStatus("Initializing system...");
-
-  // Display welcome message with NU branding - seamlessly
-  int centerX = tft.width() / 2;
-  int logoY = MESSAGE_AREA_TOP + 60;
-
-  // Ensure gold accent is intact
-  drawGoldAccent();
-
-  // Draw NU logo
-  drawNULogo(centerX, logoY, 35);
-
-  // Draw welcome text
-  tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
-  tft.setTextColor(NU_GOLD);
-  tft.setTextSize(2);
-  tft.println("Welcome, " + String(current_user));
-
-  tft.setCursor(ACCENT_WIDTH + 5, logoY + 50);
-  tft.setTextSize(1.5);
-  tft.setTextColor(ST77XX_WHITE);
-  tft.println("National University");
-
-  tft.setCursor(ACCENT_WIDTH + 5, logoY + 70);
-  tft.println("Professor's Desk Unit");
-
-  tft.setCursor(ACCENT_WIDTH + 5, logoY + 100);
-  tft.setTextColor(NU_GOLD);
-  tft.println("System Initializing...");
-
-  delay(2000);
-
-  // Set up WiFi - this will clear the welcome message but preserve gold accent
-  setup_wifi();
-
-  // Initialize NTP time synchronization after WiFi is connected
-  initializeNTP();
-
-  // Configure time (legacy ESP32 time configuration as fallback)
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer1);
-
-  // Initialize MQTT
-  mqttClient.setServer(mqtt_server, mqtt_port);
-  mqttClient.setCallback(callback);
-
-  // Initialize BLE Scanner for MAC address detection
-  Serial.println("Initializing MAC address-based faculty detection...");
-  initializeBLEScanner();
-
-  // Initialize MAC detection variables
-  facultyPresent = false;
-  oldFacultyPresent = false;
-  lastMacDetectionTime = 0;
-  lastBleScanTime = 0;
-  macDetectionCount = 0;
-  macAbsenceCount = 0;
-  detectedFacultyMac = "";
-  lastDetectedMac = "";
-
-  // Publish initial status to MQTT (both standardized and legacy topics)
-  mqttClient.publish(mqtt_topic_status, "keychain_disconnected");
-  mqttClient.publish(mqtt_topic_legacy_status, "keychain_disconnected");
-  Serial.println("MAC address detection ready, scanning for faculty devices");
-  displaySystemStatus("Scanning for faculty...");
-
-  // Update time display
-  updateTimeDisplay();
-
-  // Display ready message - seamless design (preserve gold accent)
-  tft.fillRect(ACCENT_WIDTH, MESSAGE_AREA_TOP, tft.width() - ACCENT_WIDTH, tft.height() - MESSAGE_AREA_TOP - STATUS_HEIGHT, COLOR_MESSAGE_BG);
-
-  // Ensure gold accent is maintained
-  drawGoldAccent();
-
-  // Redraw NU logo
-  drawNULogo(centerX, logoY, 35);
-
-  // Text
-  tft.setCursor(ACCENT_WIDTH + 5, MESSAGE_AREA_TOP + 10);
-  tft.setTextColor(NU_GOLD);
-  tft.setTextSize(2);
-  tft.println("System Ready");
-
-  tft.setCursor(ACCENT_WIDTH + 5, logoY + 50);
-  tft.setTextColor(ST77XX_WHITE);
-  tft.setTextSize(1.5);
-  tft.println("National University");
-
-  tft.setCursor(ACCENT_WIDTH + 5, logoY + 70);
-  tft.println("Professor's Desk Unit");
-
-  tft.setCursor(ACCENT_WIDTH + 5, logoY + 100);
-  tft.setTextColor(NU_LIGHTGOLD);
-  tft.println("Waiting for messages...");
+  DEBUG_PRINTLN("=== GRACE PERIOD BLE SYSTEM READY ===");
+  DEBUG_PRINTLN("✅ BLE disconnections now have 1-minute grace period!");
+  DEBUG_PRINTLN("✅ Simple offline message queuing enabled!");
+  drawCompleteUI();
 }
 
-// Connection monitoring and recovery functions
-void checkConnections() {
-  // Check WiFi connection
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi disconnected, attempting reconnection...");
-    displaySystemStatus("WiFi reconnecting...");
-    WiFi.reconnect();
-
-    // Wait for connection with timeout
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 10) {
-      delay(500);
-      attempts++;
-      Serial.print(".");
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\nWiFi reconnected successfully");
-      displaySystemStatus("WiFi reconnected");
-    } else {
-      Serial.println("\nWiFi reconnection failed");
-      displaySystemStatus("WiFi connection failed");
-    }
-  }
-
-  // Check MQTT connection
-  if (!mqttClient.connected()) {
-    Serial.println("MQTT disconnected, attempting reconnection...");
-    reconnect();
-  }
-
-  // Check BLE scanner status
-  if (!pBLEScan) {
-    Serial.println("BLE scanner not initialized, reinitializing...");
-    initializeBLEScanner();
-  }
-}
-
-// Basic power management function
-void handlePowerManagement() {
-  static unsigned long lastPowerCheck = 0;
-  unsigned long currentTime = millis();
-
-  // Check power status every 30 seconds
-  if (currentTime - lastPowerCheck > 30000) {
-    lastPowerCheck = currentTime;
-
-    // Monitor free heap memory
-    size_t freeHeap = ESP.getFreeHeap();
-    if (freeHeap < 10000) { // Less than 10KB free
-      Serial.printf("WARNING: Low memory detected: %d bytes free\n", freeHeap);
-      displaySystemStatus("Low memory warning");
-
-      // Force garbage collection
-      delay(10);
-    }
-
-    // Monitor CPU temperature (if available)
-    float temperature = temperatureRead();
-    if (temperature > 80.0) { // Over 80°C
-      Serial.printf("WARNING: High CPU temperature: %.1f°C\n", temperature);
-      displaySystemStatus("High temperature warning");
-    }
-
-    // Log power statistics
-    Serial.printf("Power Status - Free Heap: %d bytes, CPU Temp: %.1f°C\n",
-                  freeHeap, temperature);
-  }
-}
-
+// ================================
+// MAIN LOOP WITH GRACE PERIOD BLE SCANNER
+// ================================
 void loop() {
-  // MQTT connection management with improved reliability
-  static unsigned long lastMqttCheckTime = 0;
-  static unsigned long lastConnectionCheck = 0;
-  static unsigned long lastPowerCheck = 0;
-  unsigned long currentMillis = millis();
+  // Update button states
+  buttons.update();
 
-  // Check connections every 30 seconds
-  if (currentMillis - lastConnectionCheck > 30000) {
-    lastConnectionCheck = currentMillis;
-    checkConnections();
+  // Handle button presses
+  if (buttons.isButtonAPressed()) {
+    handleAcknowledgeButton();
   }
 
-  // Handle power management every 30 seconds
-  if (currentMillis - lastPowerCheck > 30000) {
-    lastPowerCheck = currentMillis;
-    handlePowerManagement();
+  if (buttons.isButtonBPressed()) {
+    handleBusyButton();
   }
 
-  // Check MQTT connection every 5 seconds
-  if (!mqttClient.connected() || (currentMillis - lastMqttCheckTime > 5000)) {
-    lastMqttCheckTime = currentMillis;
+  checkWiFiConnection();
 
-    if (!mqttClient.connected()) {
-      Serial.println("MQTT disconnected, attempting to reconnect...");
-      reconnect();
-    } else {
-      // Periodically check if we're still receiving messages by pinging the broker
-      mqttClient.publish(MQTT_TOPIC_NOTIFICATIONS, "ping");
-    }
+  if (wifiConnected && !mqttClient.connected()) {
+    connectMQTT();
   }
 
-  // Process MQTT messages
-  mqttClient.loop();
-
-  // Perform BLE scanning for faculty MAC addresses
-  performBLEScan();
-
-  // Periodic status updates with improved efficiency
-  if (currentMillis - lastStatusUpdate > 300000) { // Every 5 minutes
-    lastStatusUpdate = currentMillis;
-
-    // Determine status message based on faculty presence
-    const char* status_message;
-
-    if (facultyPresent) {
-      status_message = "keychain_connected";
-      Serial.println("Periodic faculty present status update sent");
-    } else {
-      status_message = "keychain_disconnected";
-      Serial.println("Periodic faculty absent status update sent");
-    }
-
-    // Send to both standardized and legacy topics
-    mqttClient.publish(mqtt_topic_status, status_message);
-    mqttClient.publish(mqtt_topic_legacy_status, status_message);
-
-    // Also update the display status
-    if (facultyPresent) {
-      displaySystemStatus("Faculty Present");
-    } else {
-      displaySystemStatus("Faculty Absent");
-    }
+  if (mqttConnected) {
+    mqttClient.loop();
   }
 
-  // Update time display every minute
-  if (currentMillis - lastTimeUpdate > 60000) {
-    lastTimeUpdate = currentMillis;
-    updateTimeDisplay();
+  // Update offline queue system
+  updateOfflineQueue();
+
+  // ADAPTIVE BLE SCANNING WITH GRACE PERIOD (Replaces old performBLEScan)
+  adaptiveScanner.update();
+
+  // Update time every 5 seconds
+  static unsigned long lastTimeUpdate = 0;
+  if (millis() - lastTimeUpdate > TIME_UPDATE_INTERVAL) {
+    updateTimeAndDate();
+    lastTimeUpdate = millis();
   }
 
-  // Check for periodic NTP time synchronization
+  // Update system status every 10 seconds
+  static unsigned long lastStatusUpdate = 0;
+  if (millis() - lastStatusUpdate > STATUS_UPDATE_INTERVAL) {
+    updateSystemStatus();
+    lastStatusUpdate = millis();
+  }
+
+  // Heartbeat every 5 minutes
+  static unsigned long lastHeartbeatTime = 0;
+  if (millis() - lastHeartbeatTime > HEARTBEAT_INTERVAL) {
+    publishHeartbeat();
+    lastHeartbeatTime = millis();
+  }
+
+  // Periodic time sync check
   checkPeriodicTimeSync();
+
+  // Simple animation toggle every 800ms
+  static unsigned long lastIndicatorUpdate = 0;
+  if (millis() - lastIndicatorUpdate > ANIMATION_INTERVAL) {
+    animationState = !animationState;
+    if (presenceDetector.getPresence() && !messageDisplayed) {
+      drawStatusIndicator(STATUS_CENTER_X, STATUS_CENTER_Y + 50, true);
+    }
+    lastIndicatorUpdate = millis();
+  }
+
+  delay(100);
 }
+
+// ================================
+// END OF GRACE PERIOD ENHANCED SYSTEM
+// ================================
