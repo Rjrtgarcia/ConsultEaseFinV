@@ -321,6 +321,19 @@ class FacultyController:
 
         if faculty:
             logger.info(f"✅ Successfully updated faculty {faculty.name} (ID: {faculty.id}) status to {status}")
+
+            # Verify the update by checking current status
+            try:
+                from ..services.database_manager import get_database_manager
+                db_manager = get_database_manager()
+                with db_manager.get_session_context() as db:
+                    updated_faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
+                    if updated_faculty:
+                        logger.info(f"🔍 Database verification: Faculty {updated_faculty.name} status is now {updated_faculty.status}")
+                    else:
+                        logger.error(f"🔍 Database verification failed: Faculty {faculty_id} not found")
+            except Exception as e:
+                logger.error(f"🔍 Database verification error: {e}")
         else:
             logger.error(f"❌ Failed to update faculty {faculty_id} status in database")
 
@@ -848,8 +861,11 @@ class FacultyController:
             grace_period_active (bool): Whether grace period is active
         """
         try:
-            db = get_db()
-            try:
+            # Use database manager for thread-safe operations
+            from ..services.database_manager import get_database_manager
+            db_manager = get_database_manager()
+
+            with db_manager.get_session_context() as db:
                 faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
                 if faculty:
                     # Update enhanced status fields
@@ -862,13 +878,13 @@ class FacultyController:
                         faculty.status = status
                         logger.info(f"Faculty {faculty_id} status updated: {status} (NTP: {ntp_sync_status}, Grace: {grace_period_active})")
 
-                    db.commit()
+                    # Commit happens automatically via context manager
                 else:
                     logger.warning(f"Faculty {faculty_id} not found for enhanced status update")
-            finally:
-                db.close()
         except Exception as e:
             logger.error(f"Error updating enhanced faculty status: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
 
     def update_faculty(self, faculty_id, name=None, department=None, email=None, ble_id=None, image_path=None, always_available=None):
         """
