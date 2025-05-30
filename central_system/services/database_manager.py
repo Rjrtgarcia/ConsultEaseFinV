@@ -106,18 +106,21 @@ class DatabaseManager:
                         logger.error("❌ SQLite filesystem validation failed")
                         return False
 
-                    # SQLite configuration - no connection pooling, thread safety enabled
+                    # SQLite configuration - optimized for Raspberry Pi and thread safety
                     self.engine = create_engine(
                         self.database_url,
                         poolclass=StaticPool,  # Use StaticPool for SQLite
                         connect_args={
                             "check_same_thread": False,  # Allow SQLite to be used across threads
                             "timeout": 30,  # Increased timeout for Raspberry Pi
-                            "isolation_level": None  # Autocommit mode for better concurrency
+                            # Remove isolation_level=None to let SQLAlchemy handle transactions properly
                         },
                         pool_pre_ping=True,  # Validate connections before use
                         echo=False,  # Set to True for SQL debugging
-                        pool_reset_on_return='commit'  # Reset connections on return
+                        pool_reset_on_return='commit',  # Reset connections on return
+                        # Add connection pool configuration for better stability
+                        pool_recycle=3600,  # Recycle connections every hour
+                        pool_timeout=30,  # Timeout for getting connection from pool
                     )
                     logger.info("✅ Created SQLite engine with StaticPool and thread safety")
                 else:
@@ -343,15 +346,33 @@ class DatabaseManager:
             }
 
     def _test_connection(self) -> bool:
-        """Test database connection using session context for thread safety."""
+        """
+        Test database connection directly using engine to avoid circular dependency.
+        This method is called during initialization before the manager is fully initialized.
+        """
         try:
-            # Use session context for thread-safe testing
-            with self.get_session_context() as session:
-                result = session.execute(text("SELECT 1 as health_check"))
+            # Use direct engine connection to avoid circular dependency with get_session_context
+            if not self.engine:
+                logger.error("❌ Database engine not created yet")
+                return False
+
+            # Test connection directly using engine
+            with self.engine.connect() as connection:
+                result = connection.execute(text("SELECT 1 as health_check"))
                 row = result.fetchone()
-                return row and row[0] == 1
+                success = row and row[0] == 1
+
+                if success:
+                    logger.debug("✅ Direct engine connection test successful")
+                else:
+                    logger.error("❌ Direct engine connection test failed - invalid result")
+
+                return success
+
         except Exception as e:
-            logger.debug(f"Database connection test failed: {e}")  # Changed to debug to reduce noise
+            logger.error(f"❌ Database connection test failed: {e}")
+            import traceback
+            logger.error(f"Connection test traceback: {traceback.format_exc()}")
             return False
 
     def _test_session_health(self, session: Session) -> bool:
@@ -550,27 +571,171 @@ class DatabaseManager:
             return False
 
     def _test_connection_with_retry(self, max_retries: int = 3) -> bool:
-        """Test database connection with retry logic."""
+        """Test database connection with retry logic and enhanced error reporting."""
+        last_error = None
+
         for attempt in range(max_retries):
             try:
                 logger.info(f"🔌 Testing database connection (attempt {attempt + 1}/{max_retries})")
 
+                # Perform detailed connection diagnostics
+                self._log_connection_diagnostics(attempt + 1)
+
+                # Try SQLAlchemy engine connection first
                 if self._test_connection():
                     logger.info("✅ Database connection test successful")
                     return True
                 else:
-                    logger.warning(f"⚠️ Database connection test failed (attempt {attempt + 1})")
+                    logger.warning(f"⚠️ SQLAlchemy connection test failed (attempt {attempt + 1})")
+
+                    # Try direct SQLite connection as fallback
+                    if self.database_url.startswith('sqlite'):
+                        logger.info("🔄 Attempting direct SQLite connection as fallback...")
+                        if self._test_direct_sqlite_connection():
+                            logger.info("✅ Direct SQLite connection successful - SQLAlchemy engine may have issues")
+                            # The direct connection works, so the issue is with SQLAlchemy configuration
+                            # Let's try to recreate the engine with simpler configuration
+                            if self._recreate_engine_simple():
+                                logger.info("🔄 Retesting with simplified engine configuration...")
+                                if self._test_connection():
+                                    logger.info("✅ Database connection successful with simplified configuration")
+                                    return True
+
+                    error_msg = f"Both SQLAlchemy and direct connection tests failed (attempt {attempt + 1})"
+                    logger.error(f"❌ {error_msg}")
+                    last_error = error_msg
 
             except Exception as e:
-                logger.error(f"❌ Database connection test error (attempt {attempt + 1}): {e}")
+                error_msg = f"Database connection test exception (attempt {attempt + 1}): {e}"
+                logger.error(f"❌ {error_msg}")
+                import traceback
+                logger.error(f"Exception traceback: {traceback.format_exc()}")
+                last_error = str(e)
 
             if attempt < max_retries - 1:
                 wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
                 logger.info(f"⏳ Waiting {wait_time} seconds before retry...")
                 time.sleep(wait_time)
 
-        logger.error("❌ All database connection attempts failed")
+        logger.error(f"❌ All database connection attempts failed. Last error: {last_error}")
         return False
+
+    def _log_connection_diagnostics(self, attempt: int):
+        """Log detailed connection diagnostics for troubleshooting."""
+        try:
+            logger.info(f"🔍 Connection diagnostics (attempt {attempt}):")
+            logger.info(f"   📁 Database URL: {self.database_url}")
+            logger.info(f"   🔧 Engine created: {self.engine is not None}")
+
+            if self.engine:
+                logger.info(f"   🏊 Pool class: {type(self.engine.pool).__name__}")
+                logger.info(f"   🔗 Pool size: {getattr(self.engine.pool, 'size', 'N/A')()}")
+                logger.info(f"   📊 Pool status: checked_in={getattr(self.engine.pool, 'checkedin', lambda: 'N/A')()}, checked_out={getattr(self.engine.pool, 'checkedout', lambda: 'N/A')()}")
+
+            # Check database file if SQLite
+            if self.database_url.startswith('sqlite'):
+                db_path = self.database_url.replace('sqlite:///', '')
+                import os
+                logger.info(f"   📄 Database file exists: {os.path.exists(db_path)}")
+                if os.path.exists(db_path):
+                    logger.info(f"   📏 Database file size: {os.path.getsize(db_path)} bytes")
+                    logger.info(f"   🔐 File readable: {os.access(db_path, os.R_OK)}")
+                    logger.info(f"   ✏️  File writable: {os.access(db_path, os.W_OK)}")
+
+        except Exception as e:
+            logger.warning(f"⚠️ Could not log connection diagnostics: {e}")
+
+    def _test_direct_sqlite_connection(self) -> bool:
+        """
+        Test SQLite connection directly using sqlite3 module as fallback.
+        This bypasses SQLAlchemy entirely for basic connectivity testing.
+        """
+        try:
+            if not self.database_url.startswith('sqlite'):
+                logger.debug("Direct SQLite test only works with SQLite databases")
+                return False
+
+            import sqlite3
+            db_path = self.database_url.replace('sqlite:///', '')
+
+            logger.info(f"🔌 Testing direct SQLite connection to: {db_path}")
+
+            # Test direct SQLite connection
+            with sqlite3.connect(db_path, timeout=30) as conn:
+                cursor = conn.execute("SELECT 1 as direct_test")
+                row = cursor.fetchone()
+                success = row and row[0] == 1
+
+                if success:
+                    logger.info("✅ Direct SQLite connection test successful")
+
+                    # Also test basic table creation to ensure write access
+                    try:
+                        conn.execute("CREATE TABLE IF NOT EXISTS connection_test (id INTEGER PRIMARY KEY, timestamp TEXT)")
+                        conn.execute("INSERT INTO connection_test (timestamp) VALUES (?)", (time.time(),))
+                        conn.execute("DELETE FROM connection_test WHERE id = last_insert_rowid()")
+                        conn.commit()
+                        logger.info("✅ Direct SQLite write test successful")
+                    except Exception as write_e:
+                        logger.warning(f"⚠️ Direct SQLite write test failed: {write_e}")
+                        # Read-only access might still be sufficient for some operations
+
+                else:
+                    logger.error("❌ Direct SQLite connection test failed - invalid result")
+
+                return success
+
+        except Exception as e:
+            logger.error(f"❌ Direct SQLite connection test failed: {e}")
+            import traceback
+            logger.error(f"Direct connection traceback: {traceback.format_exc()}")
+            return False
+
+    def _recreate_engine_simple(self) -> bool:
+        """
+        Recreate the SQLAlchemy engine with simplified configuration.
+        This is used as a fallback when the standard configuration fails.
+        """
+        try:
+            logger.info("🔄 Recreating SQLAlchemy engine with simplified configuration...")
+
+            # Dispose of the current engine
+            if self.engine:
+                self.engine.dispose()
+
+            # Create a simplified SQLite engine
+            if self.database_url.startswith('sqlite'):
+                self.engine = create_engine(
+                    self.database_url,
+                    # Minimal configuration for maximum compatibility
+                    poolclass=StaticPool,
+                    connect_args={
+                        "check_same_thread": False,
+                        "timeout": 30
+                        # Remove all other parameters that might cause issues
+                    },
+                    echo=False,
+                    # Remove pool configuration that might cause issues
+                )
+                logger.info("✅ Created simplified SQLite engine")
+
+                # Recreate session factory
+                self.SessionLocal = sessionmaker(
+                    autocommit=False,
+                    autoflush=False,
+                    bind=self.engine
+                )
+
+                return True
+            else:
+                logger.warning("⚠️ Simplified engine recreation only supports SQLite")
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ Failed to recreate simplified engine: {e}")
+            import traceback
+            logger.error(f"Engine recreation traceback: {traceback.format_exc()}")
+            return False
 
     def _ensure_database_schema(self) -> bool:
         """Ensure database schema is properly initialized."""

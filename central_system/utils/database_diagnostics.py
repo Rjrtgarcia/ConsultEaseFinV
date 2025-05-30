@@ -183,6 +183,7 @@ class DatabaseDiagnostics:
             'connection_successful': False,
             'query_test_passed': False,
             'write_test_passed': False,
+            'sqlalchemy_test_passed': False,
             'connection_time_ms': 0,
             'issues': []
         }
@@ -190,6 +191,7 @@ class DatabaseDiagnostics:
         try:
             start_time = time.time()
 
+            # Test direct SQLite connection first
             with sqlite3.connect(self.db_path, timeout=30) as conn:
                 # Test connection
                 result['connection_successful'] = True
@@ -215,6 +217,29 @@ class DatabaseDiagnostics:
                     result['write_test_passed'] = True
                 except Exception as e:
                     result['issues'].append(f"Write test failed: {e}")
+
+            # Test SQLAlchemy connection if direct connection works
+            if result['connection_successful']:
+                try:
+                    logger.info("🔧 Testing SQLAlchemy database manager connection...")
+
+                    # Import and test the database manager
+                    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                    from services.database_manager import DatabaseManager
+
+                    # Create a test database manager
+                    test_manager = DatabaseManager(f"sqlite:///{self.db_path}")
+
+                    if test_manager.initialize():
+                        result['sqlalchemy_test_passed'] = True
+                        logger.info("✅ SQLAlchemy database manager test successful")
+                        test_manager.shutdown()
+                    else:
+                        result['issues'].append("SQLAlchemy database manager initialization failed")
+
+                except Exception as e:
+                    result['issues'].append(f"SQLAlchemy test failed: {e}")
+                    logger.warning(f"⚠️ SQLAlchemy test failed: {e}")
 
         except Exception as e:
             result['issues'].append(f"Connection test failed: {e}")
