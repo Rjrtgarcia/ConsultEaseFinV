@@ -1,17 +1,21 @@
 """
-UI component library for ConsultEase.
-Provides modern, reusable UI components optimized for performance and user experience.
+Enhanced UI component library for ConsultEase.
+Provides modern, reusable UI components optimized for performance, accessibility, and user experience.
 """
 import logging
+from typing import Optional, Callable, Any, Dict, List
 from PyQt5.QtWidgets import (
     QWidget, QPushButton, QLabel, QFrame, QVBoxLayout, QHBoxLayout,
-    QLineEdit, QGraphicsDropShadowEffect, QSizePolicy, QSpacerItem
+    QLineEdit, QGraphicsDropShadowEffect, QSizePolicy, QSpacerItem,
+    QProgressBar, QMessageBox, QDialog, QDialogButtonBox
 )
 from PyQt5.QtCore import Qt, QPropertyAnimation, QRect, QEasingCurve, pyqtSignal, QSize, QTimer, QCoreApplication
-from PyQt5.QtGui import QColor, QPalette
+from PyQt5.QtGui import QColor, QPalette, QFont, QKeySequence
+from PyQt5.QtWidgets import QShortcut
 
 from .icons import IconProvider, Icons
 from .ui_performance import smart_widget_update, get_widget_state_manager
+from .code_quality import safe_operation, OperationResult
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +81,266 @@ class IconButton(QPushButton):
 
         # Flat style for icon buttons
         self.setFlat(True)
+
+
+class AccessibleButton(ModernButton):
+    """
+    Enhanced button with accessibility features and keyboard navigation.
+    """
+
+    def __init__(self, text="", icon_name=None, primary=False, danger=False,
+                 shortcut=None, tooltip=None, parent=None):
+        """
+        Initialize an accessible button with enhanced features.
+
+        Args:
+            text (str): Button text
+            icon_name (str, optional): Icon name from Icons class
+            primary (bool): Whether this is a primary button
+            danger (bool): Whether this is a danger/destructive button
+            shortcut (str, optional): Keyboard shortcut (e.g., "Ctrl+S")
+            tooltip (str, optional): Tooltip text
+            parent: Parent widget
+        """
+        super().__init__(text, icon_name, primary, danger, parent)
+
+        # Set tooltip if provided
+        if tooltip:
+            self.setToolTip(tooltip)
+
+        # Set keyboard shortcut if provided
+        if shortcut:
+            self.setShortcut(QKeySequence(shortcut))
+
+        # Enhanced accessibility
+        self.setAccessibleName(text or tooltip or "Button")
+        self.setAccessibleDescription(tooltip or f"Button: {text}")
+
+        # Focus policy for keyboard navigation
+        self.setFocusPolicy(Qt.StrongFocus)
+
+
+class LoadingButton(ModernButton):
+    """
+    Button that shows loading state during operations.
+    """
+
+    def __init__(self, text="", icon_name=None, primary=False, danger=False, parent=None):
+        """Initialize loading button."""
+        super().__init__(text, icon_name, primary, danger, parent)
+
+        self.original_text = text
+        self.is_loading = False
+        self.loading_timer = QTimer()
+        self.loading_timer.timeout.connect(self._update_loading_text)
+        self.loading_dots = 0
+
+    def start_loading(self, loading_text="Loading"):
+        """Start loading state."""
+        if not self.is_loading:
+            self.is_loading = True
+            self.setEnabled(False)
+            self.loading_text = loading_text
+            self.loading_dots = 0
+            self.loading_timer.start(500)  # Update every 500ms
+            self._update_loading_text()
+
+    def stop_loading(self):
+        """Stop loading state."""
+        if self.is_loading:
+            self.is_loading = False
+            self.setEnabled(True)
+            self.loading_timer.stop()
+            self.setText(self.original_text)
+
+    def _update_loading_text(self):
+        """Update loading text with animated dots."""
+        dots = "." * (self.loading_dots % 4)
+        self.setText(f"{self.loading_text}{dots}")
+        self.loading_dots += 1
+
+
+class StatusIndicator(QLabel):
+    """
+    Visual status indicator with color coding and animations.
+    """
+
+    # Status types
+    SUCCESS = "success"
+    WARNING = "warning"
+    ERROR = "error"
+    INFO = "info"
+    LOADING = "loading"
+
+    def __init__(self, status=INFO, text="", parent=None):
+        """
+        Initialize status indicator.
+
+        Args:
+            status (str): Status type (success, warning, error, info, loading)
+            text (str): Status text
+            parent: Parent widget
+        """
+        super().__init__(text, parent)
+
+        self.current_status = status
+        self.status_colors = {
+            self.SUCCESS: "#27ae60",
+            self.WARNING: "#f39c12",
+            self.ERROR: "#e74c3c",
+            self.INFO: "#3498db",
+            self.LOADING: "#9b59b6"
+        }
+
+        # Set initial appearance
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumHeight(30)
+        self.update_status(status, text)
+
+    def update_status(self, status, text=""):
+        """Update status and text."""
+        self.current_status = status
+        if text:
+            self.setText(text)
+
+        # Update styling based on status
+        color = self.status_colors.get(status, self.status_colors[self.INFO])
+        self.setStyleSheet(f"""
+            QLabel {{
+                background-color: {color};
+                color: white;
+                border-radius: 15px;
+                padding: 5px 15px;
+                font-weight: bold;
+            }}
+        """)
+
+        # Add loading animation if needed
+        if status == self.LOADING:
+            self._start_loading_animation()
+        else:
+            self._stop_loading_animation()
+
+    def _start_loading_animation(self):
+        """Start loading animation."""
+        if not hasattr(self, 'loading_timer'):
+            self.loading_timer = QTimer()
+            self.loading_timer.timeout.connect(self._animate_loading)
+
+        self.loading_timer.start(200)
+
+    def _stop_loading_animation(self):
+        """Stop loading animation."""
+        if hasattr(self, 'loading_timer'):
+            self.loading_timer.stop()
+
+    def _animate_loading(self):
+        """Animate loading indicator."""
+        current_text = self.text()
+        if current_text.endswith("..."):
+            self.setText(current_text[:-3])
+        elif current_text.endswith(".."):
+            self.setText(current_text + ".")
+        elif current_text.endswith("."):
+            self.setText(current_text + ".")
+        else:
+            self.setText(current_text + ".")
+
+
+class ProgressCard(QFrame):
+    """
+    Card component showing progress with status and description.
+    """
+
+    def __init__(self, title="", description="", progress=0, parent=None):
+        """
+        Initialize progress card.
+
+        Args:
+            title (str): Card title
+            description (str): Card description
+            progress (int): Progress percentage (0-100)
+            parent: Parent widget
+        """
+        super().__init__(parent)
+
+        self.setFrameStyle(QFrame.Box)
+        self.setLineWidth(1)
+        self.setObjectName("progress_card")
+
+        # Layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(10)
+
+        # Title
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("card_title")
+        layout.addWidget(self.title_label)
+
+        # Description
+        self.description_label = QLabel(description)
+        self.description_label.setObjectName("card_description")
+        self.description_label.setWordWrap(True)
+        layout.addWidget(self.description_label)
+
+        # Progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setValue(progress)
+        self.progress_bar.setTextVisible(True)
+        layout.addWidget(self.progress_bar)
+
+        # Status indicator
+        self.status_indicator = StatusIndicator(StatusIndicator.INFO, "Ready")
+        layout.addWidget(self.status_indicator)
+
+        # Apply styling
+        self._apply_styling()
+
+    def update_progress(self, progress, status_text="", status_type=StatusIndicator.INFO):
+        """Update progress and status."""
+        self.progress_bar.setValue(progress)
+        if status_text:
+            self.status_indicator.update_status(status_type, status_text)
+
+    def set_title(self, title):
+        """Set card title."""
+        self.title_label.setText(title)
+
+    def set_description(self, description):
+        """Set card description."""
+        self.description_label.setText(description)
+
+    def _apply_styling(self):
+        """Apply card styling."""
+        self.setStyleSheet("""
+            QFrame#progress_card {
+                background-color: #f8f9fa;
+                border: 1px solid #dee2e6;
+                border-radius: 8px;
+            }
+            QLabel#card_title {
+                font-size: 14pt;
+                font-weight: bold;
+                color: #2c3e50;
+            }
+            QLabel#card_description {
+                font-size: 11pt;
+                color: #7f8c8d;
+            }
+            QProgressBar {
+                border: 1px solid #bdc3c7;
+                border-radius: 4px;
+                text-align: center;
+                font-weight: bold;
+            }
+            QProgressBar::chunk {
+                background-color: #3498db;
+                border-radius: 3px;
+            }
+        """)
 
 class FacultyCard(QFrame):
     """

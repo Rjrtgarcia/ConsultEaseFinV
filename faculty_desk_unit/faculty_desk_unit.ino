@@ -1143,8 +1143,17 @@ void reconnect() {
     String clientId = mqtt_client_id;
     clientId += String(random(0xffff), HEX);
 
-    // Attempt to connect
-    if (mqttClient.connect(clientId.c_str())) {
+    // Attempt to connect with authentication if credentials are provided
+    bool connected = false;
+    if (strlen(MQTT_USERNAME) > 0 && strlen(MQTT_PASSWORD) > 0) {
+      Serial.println("Connecting with MQTT authentication...");
+      connected = mqttClient.connect(clientId.c_str(), MQTT_USERNAME, MQTT_PASSWORD);
+    } else {
+      Serial.println("Connecting without MQTT authentication...");
+      connected = mqttClient.connect(clientId.c_str());
+    }
+
+    if (connected) {
       Serial.println("connected");
       displaySystemStatus("MQTT connected");
       // Subscribe to message topics (both standardized and legacy topics)
@@ -1362,10 +1371,94 @@ void setup() {
   tft.println("Waiting for messages...");
 }
 
+// Connection monitoring and recovery functions
+void checkConnections() {
+  // Check WiFi connection
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi disconnected, attempting reconnection...");
+    displaySystemStatus("WiFi reconnecting...");
+    WiFi.reconnect();
+
+    // Wait for connection with timeout
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 10) {
+      delay(500);
+      attempts++;
+      Serial.print(".");
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nWiFi reconnected successfully");
+      displaySystemStatus("WiFi reconnected");
+    } else {
+      Serial.println("\nWiFi reconnection failed");
+      displaySystemStatus("WiFi connection failed");
+    }
+  }
+
+  // Check MQTT connection
+  if (!mqttClient.connected()) {
+    Serial.println("MQTT disconnected, attempting reconnection...");
+    reconnect();
+  }
+
+  // Check BLE scanner status
+  if (!pBLEScan) {
+    Serial.println("BLE scanner not initialized, reinitializing...");
+    initializeBLEScanner();
+  }
+}
+
+// Basic power management function
+void handlePowerManagement() {
+  static unsigned long lastPowerCheck = 0;
+  unsigned long currentTime = millis();
+
+  // Check power status every 30 seconds
+  if (currentTime - lastPowerCheck > 30000) {
+    lastPowerCheck = currentTime;
+
+    // Monitor free heap memory
+    size_t freeHeap = ESP.getFreeHeap();
+    if (freeHeap < 10000) { // Less than 10KB free
+      Serial.printf("WARNING: Low memory detected: %d bytes free\n", freeHeap);
+      displaySystemStatus("Low memory warning");
+
+      // Force garbage collection
+      delay(10);
+    }
+
+    // Monitor CPU temperature (if available)
+    float temperature = temperatureRead();
+    if (temperature > 80.0) { // Over 80°C
+      Serial.printf("WARNING: High CPU temperature: %.1f°C\n", temperature);
+      displaySystemStatus("High temperature warning");
+    }
+
+    // Log power statistics
+    Serial.printf("Power Status - Free Heap: %d bytes, CPU Temp: %.1f°C\n",
+                  freeHeap, temperature);
+  }
+}
+
 void loop() {
   // MQTT connection management with improved reliability
   static unsigned long lastMqttCheckTime = 0;
+  static unsigned long lastConnectionCheck = 0;
+  static unsigned long lastPowerCheck = 0;
   unsigned long currentMillis = millis();
+
+  // Check connections every 30 seconds
+  if (currentMillis - lastConnectionCheck > 30000) {
+    lastConnectionCheck = currentMillis;
+    checkConnections();
+  }
+
+  // Handle power management every 30 seconds
+  if (currentMillis - lastPowerCheck > 30000) {
+    lastPowerCheck = currentMillis;
+    handlePowerManagement();
+  }
 
   // Check MQTT connection every 5 seconds
   if (!mqttClient.connected() || (currentMillis - lastMqttCheckTime > 5000)) {

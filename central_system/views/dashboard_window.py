@@ -601,18 +601,8 @@ class DashboardWindow(BaseWindow):
             for container, r, c in containers:
                 self.faculty_grid.addWidget(container, r, c)
 
-            # If no faculty found, show a message
-            if not faculties:
-                no_results = QLabel("No faculty members found matching your criteria")
-                no_results.setStyleSheet("""
-                    font-size: 14pt;
-                    color: #7f8c8d;
-                    padding: 20px;
-                    background-color: #f5f5f5;
-                    border-radius: 10px;
-                """)
-                no_results.setAlignment(Qt.AlignCenter)
-                self.faculty_grid.addWidget(no_results, 0, 0, 1, max_cols)  # Span all columns
+            # Log successful population
+            logger.info(f"Successfully populated faculty grid with {len(containers)} faculty cards")
 
         finally:
             # Re-enable updates after all changes are made
@@ -1263,6 +1253,66 @@ class DashboardWindow(BaseWindow):
             if item.widget():
                 # Don't delete the widget, it's managed by the pool
                 item.widget().setParent(None)
+
+    def showEvent(self, event):
+        """
+        Handle window show event to trigger initial faculty data loading.
+        """
+        # Call parent showEvent first
+        super().showEvent(event)
+
+        # Load faculty data immediately when the window is first shown
+        # Only do this if we haven't loaded faculty data yet
+        if not hasattr(self, '_initial_load_done') or not self._initial_load_done:
+            logger.info("Dashboard window shown - triggering initial faculty data load")
+            self._initial_load_done = True
+
+            # Schedule the initial faculty load after a short delay to ensure UI is ready
+            QTimer.singleShot(100, self._perform_initial_faculty_load)
+
+    def _perform_initial_faculty_load(self):
+        """
+        Perform the initial faculty data load when the dashboard is first shown.
+        """
+        try:
+            logger.info("Performing initial faculty data load")
+
+            # Import faculty controller
+            from ..controllers import FacultyController
+
+            # Get faculty controller
+            faculty_controller = FacultyController()
+
+            # Get all faculty members
+            faculties = faculty_controller.get_all_faculty()
+
+            logger.info(f"Initial load: Found {len(faculties)} faculty members")
+
+            # Debug: Log each faculty member
+            for faculty in faculties:
+                logger.debug(f"Faculty found: {faculty.name} (ID: {faculty.id}, Status: {faculty.status}, Department: {faculty.department})")
+
+            # Populate the faculty grid
+            self.populate_faculty_grid(faculties)
+
+            # Also update the consultation panel with faculty options
+            if hasattr(self, 'consultation_panel'):
+                self.consultation_panel.set_faculty_options(faculties)
+                logger.debug("Updated consultation panel with faculty options")
+
+            # Ensure scroll area starts at the top
+            if hasattr(self, 'faculty_scroll') and self.faculty_scroll:
+                self.faculty_scroll.verticalScrollBar().setValue(0)
+                logger.debug("Reset scroll position to top")
+
+            logger.info("Initial faculty data load completed successfully")
+
+        except Exception as e:
+            logger.error(f"Error during initial faculty data load: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            # Show error message in the faculty grid
+            self._show_error_message(f"Error loading faculty data: {str(e)}")
 
     def closeEvent(self, event):
         """

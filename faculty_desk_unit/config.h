@@ -9,14 +9,16 @@
 #define CONFIG_H
 
 // WiFi Configuration
-#define WIFI_SSID "ConsultEase"
-#define WIFI_PASSWORD "Admin123"
+// ⚠️ SECURITY WARNING: Update these credentials before production deployment!
+// These are default values that MUST be changed for security
+#define WIFI_SSID "YOUR_WIFI_NETWORK"  // ⚠️ CHANGE THIS: Replace with your actual WiFi network name
+#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"  // ⚠️ CHANGE THIS: Replace with your actual WiFi password
 
 // MQTT Configuration
-#define MQTT_SERVER "172.20.10.8"  // Updated to match central system's MQTT broker IP
+#define MQTT_SERVER "192.168.1.100"  // ⚠️ CHANGE THIS: Replace with your MQTT broker IP address
 #define MQTT_PORT 1883
-#define MQTT_USERNAME ""  // Leave empty if not using authentication
-#define MQTT_PASSWORD ""  // Leave empty if not using authentication
+#define MQTT_USERNAME "consultease_esp32"  // ⚠️ CHANGE THIS: Use unique MQTT username for security
+#define MQTT_PASSWORD "CHANGE_THIS_PASSWORD"  // ⚠️ CHANGE THIS: Use strong password for MQTT authentication
 
 // Faculty Configuration
 #define FACULTY_ID 3  // This should match the faculty ID in the database

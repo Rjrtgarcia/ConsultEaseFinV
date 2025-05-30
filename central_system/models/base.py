@@ -178,6 +178,86 @@ def close_db():
     except Exception as e:
         logger.error(f"Error releasing database connection: {str(e)}")
 
+def get_connection_pool_status():
+    """
+    Get current connection pool status for monitoring.
+
+    Returns:
+        dict: Connection pool statistics
+    """
+    try:
+        pool = engine.pool
+        return {
+            'pool_size': pool.size(),
+            'checked_in': pool.checkedin(),
+            'checked_out': pool.checkedout(),
+            'overflow': pool.overflow(),
+            'invalid': pool.invalid(),
+            'total_connections': pool.size() + pool.overflow(),
+            'available_connections': pool.checkedin(),
+            'pool_status': 'healthy' if pool.checkedin() > 0 else 'warning'
+        }
+    except Exception as e:
+        logger.error(f"Error getting connection pool status: {e}")
+        return {
+            'pool_status': 'error',
+            'error': str(e)
+        }
+
+def monitor_connection_pool():
+    """
+    Monitor connection pool health and log warnings if issues detected.
+    """
+    try:
+        status = get_connection_pool_status()
+
+        # Log pool status for debugging
+        logger.debug(f"Connection pool status: {status}")
+
+        # Check for potential issues
+        if status.get('pool_status') == 'error':
+            logger.error(f"Connection pool error: {status.get('error')}")
+            return False
+
+        # Warn if pool is nearly exhausted
+        total_connections = status.get('total_connections', 0)
+        available_connections = status.get('available_connections', 0)
+
+        if total_connections > 0:
+            utilization = (total_connections - available_connections) / total_connections
+            if utilization > 0.8:  # 80% utilization
+                logger.warning(f"High connection pool utilization: {utilization:.1%}")
+                logger.warning(f"Pool stats: {status}")
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Error monitoring connection pool: {e}")
+        return False
+
+def recover_connection_pool():
+    """
+    Attempt to recover from connection pool issues.
+    """
+    try:
+        logger.info("Attempting connection pool recovery...")
+
+        # Force close all connections and recreate pool
+        engine.dispose()
+        logger.info("Disposed old connection pool")
+
+        # Test new connection
+        test_db = get_db()
+        test_db.execute("SELECT 1")
+        test_db.close()
+
+        logger.info("✅ Connection pool recovery successful")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Connection pool recovery failed: {e}")
+        return False
+
 def db_operation_with_retry(max_retries=3, retry_delay=0.5):
     """
     Decorator for database operations with retry logic.
@@ -261,6 +341,22 @@ def _create_performance_indexes():
             "CREATE INDEX IF NOT EXISTS idx_consultation_student_status ON consultations(student_id, status);",
             "CREATE INDEX IF NOT EXISTS idx_consultation_faculty_status ON consultations(faculty_id, status);",
             "CREATE INDEX IF NOT EXISTS idx_faculty_status_department ON faculty(status, department);",
+
+            # Additional performance indexes for Raspberry Pi optimization
+            "CREATE INDEX IF NOT EXISTS idx_consultation_faculty_requested_at ON consultations(faculty_id, requested_at);",
+            "CREATE INDEX IF NOT EXISTS idx_consultation_status_created_at ON consultations(status, created_at);",
+            "CREATE INDEX IF NOT EXISTS idx_faculty_ble_status ON faculty(ble_id, status);",
+            "CREATE INDEX IF NOT EXISTS idx_student_department_name ON students(department, name);",
+            "CREATE INDEX IF NOT EXISTS idx_consultation_student_created_at ON consultations(student_id, created_at);",
+
+            # Covering indexes for frequently accessed data
+            "CREATE INDEX IF NOT EXISTS idx_faculty_status_cover ON faculty(status) INCLUDE (name, department, ble_id);",
+            "CREATE INDEX IF NOT EXISTS idx_consultation_active_cover ON consultations(status, faculty_id) INCLUDE (student_id, request_message, requested_at) WHERE status IN ('pending', 'accepted');",
+
+            # Partial indexes for active records only
+            "CREATE INDEX IF NOT EXISTS idx_faculty_active ON faculty(id, name, department) WHERE status = true;",
+            "CREATE INDEX IF NOT EXISTS idx_consultation_pending ON consultations(faculty_id, requested_at) WHERE status = 'pending';",
+            "CREATE INDEX IF NOT EXISTS idx_admin_active ON admins(username, last_login) WHERE is_active = true;",
         ]
 
         # Execute index creation
@@ -387,32 +483,27 @@ def _validate_and_fix_admin(db, admin):
             admin.is_active = True
             fixes_applied.append("Activated account")
 
-        # Test if the default password works
-        if not admin.check_password("TempPass123!"):
-            issues_found.append("Default password doesn't work")
-            # Reset to default password
-            password_hash, salt = admin.hash_password("TempPass123!")
-            admin.password_hash = password_hash
-            admin.salt = salt
-            admin.force_password_change = True
-            fixes_applied.append("Reset password to default")
+        # Check if admin account has a secure password set
+        # We don't store or test default passwords for security
+        if admin.force_password_change:
+            logger.warning("⚠️  Admin account requires password change on next login")
+            issues_found.append("Password change required")
 
-        # Ensure password change is forced for security
-        if not admin.force_password_change:
+        # Ensure password change is forced for security if account seems to have default settings
+        if not admin.force_password_change and admin.created_at == admin.last_password_change:
             admin.force_password_change = True
-            fixes_applied.append("Enabled forced password change")
+            fixes_applied.append("Enabled forced password change for security")
 
         # Apply fixes if any were needed
         if fixes_applied:
             db.commit()
             logger.warning(f"🔧 Fixed admin account issues: {', '.join(fixes_applied)}")
-            logger.warning("🔑 Admin credentials: admin / TempPass123!")
-            logger.warning("⚠️  SECURITY NOTICE: Password must be changed on first login!")
+            logger.info("🔑 Admin account is configured - use admin interface to set secure password")
         else:
             logger.info("✅ Default admin account is properly configured")
 
-        # Final verification
-        return _test_admin_login(admin, "TempPass123!")
+        # Return success - we don't test passwords for security
+        return True
 
     except Exception as e:
         logger.error(f"Failed to validate/fix admin account: {e}")

@@ -66,6 +66,13 @@ class AsyncMQTTService:
         self.dropped_messages = 0
         self.last_error = None
 
+        # Message batching for performance optimization
+        self.batch_queue = Queue()
+        self.batch_size = 10  # Maximum messages per batch
+        self.batch_timeout = 0.1  # 100ms timeout for batching
+        self.last_batch_time = 0
+        self.batched_messages = 0
+
         # Initialize client
         self._initialize_client()
 
@@ -260,15 +267,16 @@ class AsyncMQTTService:
             self.client.loop_stop()
             self.client.disconnect()
 
-    def publish_async(self, topic: str, data: Any, qos: int = 1, retain: bool = False):
+    def publish_async(self, topic: str, data: Any, qos: int = 1, retain: bool = False, batch: bool = True):
         """
-        Publish message asynchronously without blocking.
+        Publish message asynchronously without blocking with optional batching.
 
         Args:
             topic: MQTT topic
             data: Data to publish (will be JSON encoded if not string)
             qos: Quality of service level
             retain: Whether to retain the message
+            batch: Whether to use message batching for performance
         """
         message = {
             'topic': topic,
@@ -279,21 +287,78 @@ class AsyncMQTTService:
         }
 
         try:
-            # Check queue size before adding
-            if self.publish_queue.qsize() >= self.max_queue_size:
-                # Remove oldest message to make room
-                try:
-                    self.publish_queue.get_nowait()
-                    self.dropped_messages += 1
-                    logger.warning(f"Dropped oldest message due to queue overflow. Total dropped: {self.dropped_messages}")
-                except Empty:
-                    pass
+            # Use batching for better performance if enabled
+            if batch and qos <= 1 and not retain:  # Only batch non-critical messages
+                self._add_to_batch(message)
+            else:
+                # Direct queue for critical messages
+                self._queue_message_direct(message)
 
-            self.publish_queue.put(message, timeout=1)
-            logger.debug(f"Message queued for publication to {topic}")
         except Exception as e:
             logger.error(f"Failed to queue message for topic {topic}: {e}")
             self.publish_errors += 1
+
+    def _add_to_batch(self, message):
+        """Add message to batch queue for optimized publishing."""
+        try:
+            current_time = time.time()
+
+            # Check if we should flush the current batch
+            if (self.batch_queue.qsize() >= self.batch_size or
+                (self.last_batch_time > 0 and current_time - self.last_batch_time > self.batch_timeout)):
+                self._flush_batch()
+
+            self.batch_queue.put(message, timeout=0.1)
+
+            if self.last_batch_time == 0:
+                self.last_batch_time = current_time
+
+        except Exception as e:
+            logger.warning(f"Failed to add message to batch, using direct queue: {e}")
+            self._queue_message_direct(message)
+
+    def _queue_message_direct(self, message):
+        """Queue message directly without batching."""
+        # Check queue size before adding
+        if self.publish_queue.qsize() >= self.max_queue_size:
+            # Remove oldest message to make room
+            try:
+                self.publish_queue.get_nowait()
+                self.dropped_messages += 1
+                logger.warning(f"Dropped oldest message due to queue overflow. Total dropped: {self.dropped_messages}")
+            except Empty:
+                pass
+
+        self.publish_queue.put(message, timeout=1)
+        logger.debug(f"Message queued for publication to {message['topic']}")
+
+    def _flush_batch(self):
+        """Flush the current batch of messages to the publish queue."""
+        if self.batch_queue.empty():
+            return
+
+        batch_messages = []
+        batch_count = 0
+
+        # Collect all messages from batch queue
+        while not self.batch_queue.empty() and batch_count < self.batch_size:
+            try:
+                message = self.batch_queue.get_nowait()
+                batch_messages.append(message)
+                batch_count += 1
+            except Empty:
+                break
+
+        if batch_messages:
+            # For now, just queue all messages individually
+            # Future enhancement: group by topic for true batching
+            for message in batch_messages:
+                self._queue_message_direct(message)
+                self.batched_messages += 1
+
+            logger.debug(f"Flushed batch of {len(batch_messages)} messages")
+
+        self.last_batch_time = 0
 
     def _publish_worker(self):
         """Background worker for publishing messages."""
@@ -399,15 +464,18 @@ class AsyncMQTTService:
                     logger.error(f"Error unsubscribing from topic {topic}: {e}")
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get service statistics."""
+        """Get service statistics including batching metrics."""
         return {
             'connected': self.is_connected,
             'messages_published': self.messages_published,
             'messages_received': self.messages_received,
             'publish_errors': self.publish_errors,
             'dropped_messages': self.dropped_messages,
+            'batched_messages': self.batched_messages,
             'queue_size': self.publish_queue.qsize(),
+            'batch_queue_size': self.batch_queue.qsize(),
             'max_queue_size': self.max_queue_size,
+            'batch_size': self.batch_size,
             'last_error': self.last_error,
             'last_ping': self.last_ping
         }

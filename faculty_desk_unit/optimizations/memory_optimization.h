@@ -12,6 +12,7 @@
 #define MAX_MESSAGE_LENGTH 512
 #define MAX_LINE_LENGTH 64
 #define DISPLAY_BUFFER_SIZE 1024
+#define MEMORY_HISTORY_SIZE 20  // Number of memory samples to track for leak detection
 
 // Optimized string handling class
 class OptimizedStringHandler {
@@ -107,6 +108,17 @@ public:
             free(ptr);
         }
     }
+
+    // Enhanced memory management methods
+    static void detectMemoryLeaks(size_t currentFree, unsigned long currentTime);
+    static void analyzeMemoryTrend(size_t* history);
+    static void performProactiveCleanup(size_t currentFree, unsigned long currentTime);
+    static void performAggressiveCleanup();
+    static void cleanupDisplayBuffers();
+    static void cleanupStringBuffers();
+    static void cleanupNetworkBuffers();
+    static void logMemoryStatus(size_t currentFree, unsigned long currentTime);
+    static void handleCriticalMemory(size_t currentFree);
 };
 
 // Optimized display buffer management

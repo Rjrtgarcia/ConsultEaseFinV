@@ -131,12 +131,20 @@ class ConsultEaseApp:
         from .utils.system_monitor import start_system_monitoring
         start_system_monitoring()
 
-        # Initialize async MQTT service
-        logger.info("Initializing async MQTT service")
-        self.async_mqtt_service = get_async_mqtt_service()
-        self.async_mqtt_service.start()
+        # Initialize system coordinator
+        logger.info("Initializing system coordinator")
+        from .services.system_coordinator import get_system_coordinator
+        self.system_coordinator = get_system_coordinator()
 
-        # Initialize controllers
+        # Register services with coordinator
+        self._register_system_services()
+
+        # Start coordinated system
+        if not self.system_coordinator.start_system():
+            logger.error("Failed to start system coordinator")
+            sys.exit(1)
+
+        # Initialize controllers (after system coordinator)
         self.rfid_controller = RFIDController()
         self.faculty_controller = FacultyController()
         self.consultation_controller = ConsultationController()
@@ -199,6 +207,133 @@ class ConsultEaseApp:
 
         # Store fullscreen preference for use in window creation
         self.fullscreen = fullscreen
+
+    def _register_system_services(self):
+        """Register services with the system coordinator."""
+        logger.info("Registering system services with coordinator")
+
+        # Register database service
+        self.system_coordinator.register_service(
+            name="database",
+            dependencies=[],
+            startup_callback=self._start_database_service,
+            shutdown_callback=self._stop_database_service,
+            health_check_callback=self._check_database_health,
+            health_check_interval=30.0,
+            max_restart_attempts=3
+        )
+
+        # Register MQTT service
+        self.system_coordinator.register_service(
+            name="mqtt",
+            dependencies=["database"],
+            startup_callback=self._start_mqtt_service,
+            shutdown_callback=self._stop_mqtt_service,
+            health_check_callback=self._check_mqtt_health,
+            health_check_interval=30.0,
+            max_restart_attempts=3
+        )
+
+        # Register UI service
+        self.system_coordinator.register_service(
+            name="ui",
+            dependencies=["database", "mqtt"],
+            startup_callback=self._start_ui_service,
+            shutdown_callback=self._stop_ui_service,
+            health_check_callback=self._check_ui_health,
+            health_check_interval=60.0,
+            max_restart_attempts=1  # UI should not auto-restart
+        )
+
+        logger.info("System services registered successfully")
+
+    def _start_database_service(self):
+        """Start database service."""
+        try:
+            from .services.database_manager import get_database_manager
+            db_manager = get_database_manager()
+            return db_manager.initialize()
+        except Exception as e:
+            logger.error(f"Failed to start database service: {e}")
+            return False
+
+    def _stop_database_service(self):
+        """Stop database service."""
+        try:
+            from .services.database_manager import get_database_manager
+            db_manager = get_database_manager()
+            db_manager.shutdown()
+        except Exception as e:
+            logger.error(f"Error stopping database service: {e}")
+
+    def _check_database_health(self):
+        """Check database health."""
+        try:
+            from .services.database_manager import get_database_manager
+            db_manager = get_database_manager()
+            health_status = db_manager.get_health_status()
+            return health_status.get('is_healthy', False)
+        except Exception as e:
+            logger.debug(f"Database health check failed: {e}")
+            return False
+
+    def _start_mqtt_service(self):
+        """Start MQTT service."""
+        try:
+            from .services.async_mqtt_service import get_async_mqtt_service
+            mqtt_service = get_async_mqtt_service()
+            mqtt_service.start()
+            mqtt_service.connect()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start MQTT service: {e}")
+            return False
+
+    def _stop_mqtt_service(self):
+        """Stop MQTT service."""
+        try:
+            from .services.async_mqtt_service import get_async_mqtt_service
+            mqtt_service = get_async_mqtt_service()
+            mqtt_service.stop()
+        except Exception as e:
+            logger.error(f"Error stopping MQTT service: {e}")
+
+    def _check_mqtt_health(self):
+        """Check MQTT health."""
+        try:
+            from .services.async_mqtt_service import get_async_mqtt_service
+            mqtt_service = get_async_mqtt_service()
+            stats = mqtt_service.get_stats()
+            return stats.get('connected', False)
+        except Exception as e:
+            logger.debug(f"MQTT health check failed: {e}")
+            return False
+
+    def _start_ui_service(self):
+        """Start UI service."""
+        try:
+            # UI service is considered started when the application is running
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start UI service: {e}")
+            return False
+
+    def _stop_ui_service(self):
+        """Stop UI service."""
+        try:
+            # UI service shutdown is handled by application shutdown
+            pass
+        except Exception as e:
+            logger.error(f"Error stopping UI service: {e}")
+
+    def _check_ui_health(self):
+        """Check UI health."""
+        try:
+            # Basic UI health check - application is running
+            return self.app is not None
+        except Exception as e:
+            logger.debug(f"UI health check failed: {e}")
+            return False
 
     def _verify_admin_account_startup(self):
         """

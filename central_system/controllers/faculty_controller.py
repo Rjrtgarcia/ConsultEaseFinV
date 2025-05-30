@@ -294,7 +294,7 @@ class FacultyController:
 
     def update_faculty_status(self, faculty_id, status):
         """
-        Update faculty status in the database.
+        Update faculty status in the database with atomic operations to prevent race conditions.
 
         Args:
             faculty_id (int): Faculty ID
@@ -303,33 +303,145 @@ class FacultyController:
         Returns:
             Faculty: Updated faculty object or None if not found
         """
-        try:
-            db = get_db()
-            faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
+        import threading
 
-            if not faculty:
-                logger.error(f"Faculty not found: {faculty_id}")
+        # Use a lock to prevent concurrent status updates for the same faculty
+        lock_key = f"faculty_status_{faculty_id}"
+        if not hasattr(self, '_status_locks'):
+            self._status_locks = {}
+
+        if lock_key not in self._status_locks:
+            self._status_locks[lock_key] = threading.Lock()
+
+        with self._status_locks[lock_key]:
+            try:
+                db = get_db()
+
+                # Start a database transaction for atomic operations
+                with db.begin():
+                    # Use SELECT FOR UPDATE to lock the row and prevent concurrent modifications
+                    faculty = db.query(Faculty).filter(Faculty.id == faculty_id).with_for_update().first()
+
+                    if not faculty:
+                        logger.error(f"Faculty not found: {faculty_id}")
+                        return None
+
+                    # Check if status actually changed to avoid unnecessary updates
+                    if faculty.status == status:
+                        logger.debug(f"Faculty {faculty.name} (ID: {faculty.id}) status unchanged: {status}")
+                        return faculty
+
+                    # Store previous status for logging
+                    previous_status = faculty.status
+
+                    # Update status and timestamp atomically
+                    faculty.status = status
+                    faculty.last_seen = datetime.datetime.now()
+
+                    # Increment a version counter to detect concurrent modifications
+                    if not hasattr(faculty, 'version'):
+                        faculty.version = 1
+                    else:
+                        faculty.version += 1
+
+                    # Commit the transaction
+                    db.commit()
+
+                    logger.info(f"Atomically updated status for faculty {faculty.name} (ID: {faculty.id}): {previous_status} -> {status}")
+
+                # Invalidate faculty cache when status changes (outside transaction)
+                invalidate_faculty_cache()
+                invalidate_cache_pattern("get_all_faculty")
+
+                # Publish MQTT notification with sequence number to ensure ordering
+                self._publish_status_update_with_sequence(faculty, status, previous_status)
+
+                return faculty
+
+            except Exception as e:
+                logger.error(f"Error updating faculty status atomically: {str(e)}")
+                db.rollback()
                 return None
 
-            # Always update status based on BLE connection
-            # The always_available flag is no longer used
+    def _publish_status_update_with_sequence(self, faculty, new_status, previous_status):
+        """
+        Publish faculty status update with sequence number for message ordering.
 
-            # Otherwise, update status normally
-            faculty.status = status
-            faculty.last_seen = datetime.datetime.now()
+        Args:
+            faculty: Faculty object
+            new_status: New status value
+            previous_status: Previous status value
+        """
+        try:
+            # Generate sequence number for message ordering
+            if not hasattr(self, '_message_sequence'):
+                self._message_sequence = 0
 
-            db.commit()
+            self._message_sequence += 1
 
-            # Invalidate faculty cache when status changes
-            invalidate_faculty_cache()
-            invalidate_cache_pattern("get_all_faculty")
+            # Create notification with sequence number and timestamp
+            notification = {
+                'type': 'faculty_status',
+                'faculty_id': faculty.id,
+                'faculty_name': faculty.name,
+                'status': new_status,
+                'previous_status': previous_status,
+                'sequence': self._message_sequence,
+                'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None,
+                'version': getattr(faculty, 'version', 1)
+            }
 
-            logger.info(f"Updated status for faculty {faculty.name} (ID: {faculty.id}): {status}")
+            # Publish to both standardized and legacy topics for compatibility
+            topics = [
+                MQTTTopics.SYSTEM_NOTIFICATIONS,
+                f"consultease/faculty/{faculty.id}/status_update"
+            ]
 
-            return faculty
+            for topic in topics:
+                try:
+                    publish_mqtt_message(topic, notification)
+                    logger.debug(f"Published status update to {topic} with sequence {self._message_sequence}")
+                except Exception as e:
+                    logger.error(f"Error publishing to {topic}: {str(e)}")
+
         except Exception as e:
-            logger.error(f"Error updating faculty status: {str(e)}")
-            return None
+            logger.error(f"Error publishing faculty status notification: {str(e)}")
+
+    def handle_concurrent_status_update(self, faculty_id, status, source="unknown"):
+        """
+        Handle concurrent status updates with conflict resolution.
+
+        Args:
+            faculty_id (int): Faculty ID
+            status (bool): New status
+            source (str): Source of the update (e.g., "mqtt", "ble", "manual")
+
+        Returns:
+            Faculty: Updated faculty object or None if failed
+        """
+        max_retries = 3
+        retry_delay = 0.1  # 100ms
+
+        for attempt in range(max_retries):
+            try:
+                # Attempt atomic update
+                faculty = self.update_faculty_status(faculty_id, status)
+
+                if faculty:
+                    logger.info(f"Successfully updated faculty {faculty_id} status to {status} from {source} (attempt {attempt + 1})")
+                    return faculty
+                else:
+                    logger.warning(f"Failed to update faculty {faculty_id} status (attempt {attempt + 1})")
+
+            except Exception as e:
+                logger.warning(f"Concurrent update conflict for faculty {faculty_id} (attempt {attempt + 1}): {e}")
+
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
+
+        logger.error(f"Failed to update faculty {faculty_id} status after {max_retries} attempts")
+        return None
 
     @cached_query(ttl=180)  # Cache for 3 minutes
     def get_all_faculty(self, filter_available=None, search_term=None, page=None, page_size=50):
@@ -436,93 +548,120 @@ class FacultyController:
         Returns:
             tuple: (Faculty object or None, list of validation errors)
         """
-        validation_errors = []
+        from ..utils.code_quality import safe_operation, OperationResult
 
-        try:
-            # Validate all inputs
-            try:
-                name = validate_name_safe(name)
-            except ValidationError as e:
-                validation_errors.append(str(e))
-
-            try:
-                department = validate_department_safe(department)
-            except ValidationError as e:
-                validation_errors.append(str(e))
-
-            try:
-                email = validate_email_safe(email)
-            except ValidationError as e:
-                validation_errors.append(str(e))
-
-            try:
-                ble_id = validate_ble_id_safe(ble_id)
-            except ValidationError as e:
-                validation_errors.append(str(e))
-
-            # If validation failed, return errors
+        @safe_operation(log_errors=True)
+        def _add_faculty_operation():
+            # Validate inputs
+            validation_errors = self._validate_faculty_inputs(name, department, email, ble_id)
             if validation_errors:
-                logger.warning(f"Faculty creation validation failed: {validation_errors}")
                 return None, validation_errors
 
-            db = get_db()
+            # Check for duplicates
+            duplicate_error = self._check_faculty_duplicates(email, ble_id)
+            if duplicate_error:
+                return None, [duplicate_error]
 
-            # Check if email or BLE ID already exists
+            # Create and save faculty
+            faculty = self._create_and_save_faculty(name, department, email, ble_id, image_path)
+
+            # Post-creation tasks
+            self._handle_faculty_creation_success(faculty)
+
+            return faculty, []
+
+        result = _add_faculty_operation()
+        if result.is_success():
+            return result.get_data()
+        else:
+            error_msg = result.get_error_message()
+            logger.error(f"Error adding faculty: {error_msg}")
+            return None, [error_msg]
+
+    def _validate_faculty_inputs(self, name, department, email, ble_id):
+        """Validate all faculty input fields."""
+        validation_errors = []
+
+        validators = [
+            (validate_name_safe, name),
+            (validate_department_safe, department),
+            (validate_email_safe, email),
+            (validate_ble_id_safe, ble_id)
+        ]
+
+        for validator_func, value in validators:
+            try:
+                validator_func(value)
+            except ValidationError as e:
+                validation_errors.append(str(e))
+
+        return validation_errors
+
+    def _check_faculty_duplicates(self, email, ble_id):
+        """Check for duplicate email or BLE ID."""
+        try:
+            db = get_db()
             existing = db.query(Faculty).filter(
-                or_(
-                    Faculty.email == email,
-                    Faculty.ble_id == ble_id
-                )
+                or_(Faculty.email == email, Faculty.ble_id == ble_id)
             ).first()
 
             if existing:
-                error_msg = f"Faculty with email {email} or BLE ID {ble_id} already exists"
-                logger.error(error_msg)
-                return None, [error_msg]
-
-            # Create new faculty
-            faculty = Faculty(
-                name=name,
-                department=department,
-                email=email,
-                ble_id=ble_id,
-                image_path=image_path,
-                status=False,  # Initial status is False, will be updated by BLE
-                always_available=False  # Always set to False
-            )
-
-            db.add(faculty)
-            db.commit()
-
-            logger.info(f"Added new faculty: {faculty.name} (ID: {faculty.id})")
-
-            # Invalidate faculty cache
-            invalidate_faculty_cache()
-            invalidate_cache_pattern("get_all_faculty")
-
-            # Clear method-level cache if it exists
-            if hasattr(self.get_all_faculty, 'cache_clear'):
-                self.get_all_faculty.cache_clear()
-
-            # Publish a notification about the new faculty
-            logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) created with BLE-based availability")
-            try:
-                notification = {
-                    'type': 'faculty_status',
-                    'faculty_id': faculty.id,
-                    'faculty_name': faculty.name,
-                    'status': faculty.status,
-                    'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
-                }
-                publish_mqtt_message(MQTTTopics.SYSTEM_NOTIFICATIONS, notification)
-            except Exception as e:
-                logger.error(f"Error publishing faculty status notification: {str(e)}")
-
-            return faculty, []
+                return f"Faculty with email {email} or BLE ID {ble_id} already exists"
+            return None
         except Exception as e:
-            error_msg = f"Error adding faculty: {str(e)}"
-            logger.error(error_msg)
-            return None, [error_msg]
+            logger.error(f"Error checking faculty duplicates: {e}")
+            return f"Error checking for duplicates: {str(e)}"
+
+    def _create_and_save_faculty(self, name, department, email, ble_id, image_path):
+        """Create and save new faculty to database."""
+        db = get_db()
+
+        faculty = Faculty(
+            name=name,
+            department=department,
+            email=email,
+            ble_id=ble_id,
+            image_path=image_path,
+            status=False,  # Initial status is False, will be updated by BLE
+            always_available=False  # Always set to False
+        )
+
+        db.add(faculty)
+        db.commit()
+
+        logger.info(f"Added new faculty: {faculty.name} (ID: {faculty.id})")
+        return faculty
+
+    def _handle_faculty_creation_success(self, faculty):
+        """Handle post-creation tasks for new faculty."""
+        # Invalidate caches
+        self._invalidate_faculty_caches()
+
+        # Publish notification
+        self._publish_faculty_creation_notification(faculty)
+
+    def _invalidate_faculty_caches(self):
+        """Invalidate all faculty-related caches."""
+        invalidate_faculty_cache()
+        invalidate_cache_pattern("get_all_faculty")
+
+        if hasattr(self.get_all_faculty, 'cache_clear'):
+            self.get_all_faculty.cache_clear()
+
+    def _publish_faculty_creation_notification(self, faculty):
+        """Publish MQTT notification for new faculty creation."""
+        try:
+            notification = {
+                'type': 'faculty_status',
+                'faculty_id': faculty.id,
+                'faculty_name': faculty.name,
+                'status': faculty.status,
+                'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
+            }
+            publish_mqtt_message(MQTTTopics.SYSTEM_NOTIFICATIONS, notification)
+            logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) created with BLE-based availability")
+        except Exception as e:
+            logger.error(f"Error publishing faculty status notification: {str(e)}")
 
     def update_faculty(self, faculty_id, name=None, department=None, email=None, ble_id=None, image_path=None, always_available=None):
         """
