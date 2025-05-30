@@ -81,7 +81,7 @@ class DatabaseManager:
 
     def initialize(self) -> bool:
         """
-        Initialize database engine and connection pool.
+        Initialize database engine and connection pool with comprehensive error handling.
 
         Returns:
             bool: True if initialization successful
@@ -92,20 +92,34 @@ class DatabaseManager:
                 return True
 
             try:
+                logger.info(f"🔄 Initializing database manager with URL: {self.database_url}")
+
+                # Validate database configuration before proceeding
+                if not self._validate_database_config():
+                    logger.error("❌ Database configuration validation failed")
+                    return False
+
                 # Create engine with appropriate configuration for database type
                 if self.database_url.startswith('sqlite'):
+                    # Validate SQLite file system requirements
+                    if not self._validate_sqlite_filesystem():
+                        logger.error("❌ SQLite filesystem validation failed")
+                        return False
+
                     # SQLite configuration - no connection pooling, thread safety enabled
                     self.engine = create_engine(
                         self.database_url,
                         poolclass=StaticPool,  # Use StaticPool for SQLite
                         connect_args={
                             "check_same_thread": False,  # Allow SQLite to be used across threads
-                            "timeout": 20  # Connection timeout
+                            "timeout": 30,  # Increased timeout for Raspberry Pi
+                            "isolation_level": None  # Autocommit mode for better concurrency
                         },
                         pool_pre_ping=True,  # Validate connections before use
-                        echo=False  # Set to True for SQL debugging
+                        echo=False,  # Set to True for SQL debugging
+                        pool_reset_on_return='commit'  # Reset connections on return
                     )
-                    logger.info("Created SQLite engine with StaticPool and thread safety")
+                    logger.info("✅ Created SQLite engine with StaticPool and thread safety")
                 else:
                     # PostgreSQL configuration - full connection pooling
                     self.engine = create_engine(
@@ -118,7 +132,7 @@ class DatabaseManager:
                         pool_pre_ping=True,  # Validate connections before use
                         echo=False  # Set to True for SQL debugging
                     )
-                    logger.info("Created PostgreSQL engine with QueuePool")
+                    logger.info("✅ Created PostgreSQL engine with QueuePool")
 
                 # Setup event listeners for monitoring
                 self._setup_event_listeners()
@@ -130,21 +144,28 @@ class DatabaseManager:
                     bind=self.engine
                 )
 
-                # Test initial connection
-                if self._test_connection():
+                # Test initial connection with retry logic
+                if self._test_connection_with_retry():
+                    # Initialize database schema if needed
+                    if not self._ensure_database_schema():
+                        logger.error("❌ Database schema initialization failed")
+                        return False
+
                     self.is_initialized = True
                     self.is_healthy = True
-                    logger.info("Database manager initialized successfully")
+                    logger.info("✅ Database manager initialized successfully")
 
                     # Start health monitoring
                     self.start_health_monitoring()
                     return True
                 else:
-                    logger.error("Failed to establish initial database connection")
+                    logger.error("❌ Failed to establish initial database connection after retries")
                     return False
 
             except Exception as e:
-                logger.error(f"Error initializing database manager: {e}")
+                logger.error(f"❌ Error initializing database manager: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 self.stats.last_error = str(e)
                 return False
 
@@ -411,6 +432,172 @@ class DatabaseManager:
                 (self.stats.avg_query_time * (self.stats.total_queries - 1) + query_time) /
                 self.stats.total_queries
             )
+
+    def _validate_database_config(self) -> bool:
+        """Validate database configuration before initialization."""
+        try:
+            if not self.database_url:
+                logger.error("❌ Database URL is empty")
+                return False
+
+            if self.database_url.startswith('sqlite'):
+                # Extract database file path from URL
+                db_path = self.database_url.replace('sqlite:///', '')
+                if not db_path:
+                    logger.error("❌ SQLite database path is empty")
+                    return False
+
+                logger.info(f"📁 SQLite database path: {db_path}")
+                return True
+            else:
+                # For other database types, basic URL validation
+                if '://' not in self.database_url:
+                    logger.error("❌ Invalid database URL format")
+                    return False
+                return True
+
+        except Exception as e:
+            logger.error(f"❌ Database configuration validation error: {e}")
+            return False
+
+    def _validate_sqlite_filesystem(self) -> bool:
+        """Validate SQLite filesystem requirements."""
+        try:
+            import os
+            import stat
+
+            # Extract database file path from URL
+            db_path = self.database_url.replace('sqlite:///', '')
+            db_dir = os.path.dirname(os.path.abspath(db_path)) if os.path.dirname(db_path) else '.'
+
+            logger.info(f"🔍 Validating SQLite filesystem for: {db_path}")
+            logger.info(f"📁 Database directory: {db_dir}")
+
+            # Check if directory exists, create if needed
+            if not os.path.exists(db_dir):
+                logger.info(f"📁 Creating database directory: {db_dir}")
+                try:
+                    os.makedirs(db_dir, exist_ok=True)
+                except PermissionError:
+                    logger.error(f"❌ Permission denied creating directory: {db_dir}")
+                    return False
+                except Exception as e:
+                    logger.error(f"❌ Error creating directory {db_dir}: {e}")
+                    return False
+
+            # Check directory permissions
+            if not os.access(db_dir, os.W_OK):
+                logger.error(f"❌ No write permission for directory: {db_dir}")
+                return False
+
+            # Check disk space (require at least 100MB)
+            try:
+                statvfs = os.statvfs(db_dir)
+                free_space = statvfs.f_frsize * statvfs.f_bavail
+                free_space_mb = free_space / (1024 * 1024)
+
+                logger.info(f"💾 Available disk space: {free_space_mb:.1f} MB")
+
+                if free_space_mb < 100:
+                    logger.error(f"❌ Insufficient disk space: {free_space_mb:.1f} MB (minimum 100 MB required)")
+                    return False
+            except Exception as e:
+                logger.warning(f"⚠️ Could not check disk space: {e}")
+
+            # If database file exists, check if it's accessible
+            if os.path.exists(db_path):
+                logger.info(f"📄 Database file exists: {db_path}")
+
+                # Check file permissions
+                if not os.access(db_path, os.R_OK | os.W_OK):
+                    logger.error(f"❌ No read/write permission for database file: {db_path}")
+                    return False
+
+                # Check if file is locked
+                try:
+                    with open(db_path, 'r+b') as f:
+                        pass  # Just try to open for read/write
+                except PermissionError:
+                    logger.error(f"❌ Database file is locked or permission denied: {db_path}")
+                    return False
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not test file access: {e}")
+
+                # Get file size
+                file_size = os.path.getsize(db_path)
+                logger.info(f"📊 Database file size: {file_size} bytes")
+
+                # Check if file is corrupted (basic check)
+                if file_size > 0:
+                    try:
+                        with open(db_path, 'rb') as f:
+                            header = f.read(16)
+                            if not header.startswith(b'SQLite format 3'):
+                                logger.error(f"❌ Database file appears to be corrupted (invalid SQLite header)")
+                                return False
+                    except Exception as e:
+                        logger.warning(f"⚠️ Could not validate SQLite header: {e}")
+            else:
+                logger.info(f"📄 Database file does not exist, will be created: {db_path}")
+
+            logger.info("✅ SQLite filesystem validation passed")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ SQLite filesystem validation error: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return False
+
+    def _test_connection_with_retry(self, max_retries: int = 3) -> bool:
+        """Test database connection with retry logic."""
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"🔌 Testing database connection (attempt {attempt + 1}/{max_retries})")
+
+                if self._test_connection():
+                    logger.info("✅ Database connection test successful")
+                    return True
+                else:
+                    logger.warning(f"⚠️ Database connection test failed (attempt {attempt + 1})")
+
+            except Exception as e:
+                logger.error(f"❌ Database connection test error (attempt {attempt + 1}): {e}")
+
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                logger.info(f"⏳ Waiting {wait_time} seconds before retry...")
+                time.sleep(wait_time)
+
+        logger.error("❌ All database connection attempts failed")
+        return False
+
+    def _ensure_database_schema(self) -> bool:
+        """Ensure database schema is properly initialized."""
+        try:
+            logger.info("🔧 Ensuring database schema is initialized...")
+
+            # Import models to ensure they're registered
+            try:
+                from ..models.base import Base
+                from ..models import Faculty, Student, Admin, Consultation
+                logger.info("📋 Imported database models")
+            except ImportError as e:
+                logger.error(f"❌ Failed to import database models: {e}")
+                return False
+
+            # Create tables if they don't exist
+            try:
+                Base.metadata.create_all(bind=self.engine)
+                logger.info("✅ Database schema created/verified")
+                return True
+            except Exception as e:
+                logger.error(f"❌ Failed to create database schema: {e}")
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ Database schema initialization error: {e}")
+            return False
 
     def shutdown(self):
         """Shutdown database manager."""

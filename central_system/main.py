@@ -120,13 +120,6 @@ class ConsultEaseApp:
         from .utils.hardware_validator import log_hardware_status
         hardware_status = log_hardware_status()
 
-        # Initialize database with comprehensive admin account validation
-        logger.info("Initializing database and ensuring admin account integrity...")
-        init_db()
-
-        # Perform additional admin account verification after database initialization
-        self._verify_admin_account_startup()
-
         # Start system monitoring
         logger.info("Starting system monitoring...")
         from .utils.system_monitor import start_system_monitoring
@@ -140,10 +133,15 @@ class ConsultEaseApp:
         # Register services with coordinator
         self._register_system_services()
 
-        # Start coordinated system
+        # Start coordinated system (database will be initialized by the database service)
+        logger.info("🚀 Starting coordinated system services...")
         if not self.system_coordinator.start_system():
-            logger.error("Failed to start system coordinator")
+            logger.error("❌ Failed to start system coordinator")
             sys.exit(1)
+
+        # Perform admin account verification after database service is running
+        logger.info("🔐 Verifying admin account integrity after database initialization...")
+        self._verify_admin_account_startup()
 
         # Initialize controllers (after system coordinator)
         self.rfid_controller = RFIDController()
@@ -256,14 +254,47 @@ class ConsultEaseApp:
         logger.info("System services registered successfully")
 
     def _start_database_service(self):
-        """Start database service."""
+        """Start database service with comprehensive error handling."""
         try:
+            logger.info("🔄 Starting database service...")
+
             from .services.database_manager import get_database_manager
             db_manager = get_database_manager()
-            return db_manager.initialize()
+
+            if db_manager.initialize():
+                logger.info("✅ Database service started successfully")
+
+                # Initialize database schema and admin account
+                self._initialize_database_schema()
+
+                return True
+            else:
+                logger.error("❌ Database manager initialization failed")
+                return False
+
         except Exception as e:
-            logger.error(f"Failed to start database service: {e}")
+            logger.error(f"❌ Failed to start database service: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return False
+
+    def _initialize_database_schema(self):
+        """Initialize database schema and default data after database service starts."""
+        try:
+            logger.info("🔧 Initializing database schema and default data...")
+
+            # Import and run database initialization
+            from .models.base import init_db
+            init_db()
+
+            logger.info("✅ Database schema and default data initialized")
+
+        except Exception as e:
+            logger.error(f"❌ Error initializing database schema: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            # Don't fail the service startup for schema issues
+            # The database manager is working, schema issues can be resolved later
 
     def _stop_database_service(self):
         """Stop database service."""
