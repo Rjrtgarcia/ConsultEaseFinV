@@ -169,6 +169,9 @@ class ConsultEaseApp:
         logger.info("Starting faculty controller")
         self.faculty_controller.start()
 
+        # Register faculty status update callback for real-time UI updates
+        self.faculty_controller.register_callback(self.handle_faculty_status_update)
+
         logger.info("Starting consultation controller")
         self.consultation_controller.start()
 
@@ -818,6 +821,28 @@ class ConsultEaseApp:
             self.login_window.handle_rfid_read(rfid_uid, student)
         else:
             logger.info(f"Login window not visible, RFID scan not forwarded: {rfid_uid}")
+
+    def handle_faculty_status_update(self, faculty_data):
+        """
+        Handle real-time faculty status updates from MQTT.
+
+        Args:
+            faculty_data (dict): Faculty status data from MQTT
+        """
+        try:
+            logger.info(f"🔄 Real-time faculty status update received: {faculty_data}")
+
+            # Update dashboard if it's currently shown
+            if self.dashboard_window and hasattr(self.dashboard_window, 'refresh_faculty_status'):
+                logger.info("📱 Updating dashboard with new faculty status")
+                self.dashboard_window.refresh_faculty_status(faculty_data)
+            else:
+                logger.debug("Dashboard not available for real-time update")
+
+        except Exception as e:
+            logger.error(f"Error handling faculty status update: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
 
     def handle_student_authenticated(self, student_data):
         """

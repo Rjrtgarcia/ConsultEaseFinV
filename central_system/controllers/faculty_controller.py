@@ -61,15 +61,33 @@ class FacultyController:
     def _notify_callbacks(self, faculty):
         """
         Notify all registered callbacks with the updated faculty information.
+        Uses safe faculty data to prevent DetachedInstanceError.
 
         Args:
             faculty (Faculty): Updated faculty object
         """
+        # Create safe faculty data dictionary to prevent DetachedInstanceError
+        safe_faculty_data = {
+            'id': faculty.id,
+            'name': faculty.name,
+            'department': faculty.department,
+            'status': faculty.status,
+            'last_seen': faculty.last_seen.isoformat() if faculty.last_seen else None,
+            'email': getattr(faculty, 'email', ''),
+            'ble_id': getattr(faculty, 'ble_id', ''),
+            'image_path': getattr(faculty, 'image_path', None),
+            'always_available': getattr(faculty, 'always_available', False),
+            'ntp_sync_status': getattr(faculty, 'ntp_sync_status', 'UNKNOWN'),
+            'grace_period_active': getattr(faculty, 'grace_period_active', False)
+        }
+
         for callback in self.callbacks:
             try:
-                callback(faculty)
+                callback(safe_faculty_data)
             except Exception as e:
                 logger.error(f"Error in Faculty controller callback: {str(e)}")
+                import traceback
+                logger.error(f"Callback traceback: {traceback.format_exc()}")
 
     def handle_faculty_status_update(self, topic, data):
         """
@@ -429,7 +447,24 @@ class FacultyController:
                 # Publish MQTT notification with sequence number to ensure ordering
                 self._publish_status_update_with_sequence_safe(faculty_data, status, previous_status)
 
-                return faculty
+                # Return a safe faculty object that won't cause DetachedInstanceError
+                # Create a detached copy of the faculty object with all needed attributes
+                safe_faculty = Faculty()
+                safe_faculty.id = faculty.id
+                safe_faculty.name = faculty.name
+                safe_faculty.department = faculty.department
+                safe_faculty.status = faculty.status
+                safe_faculty.last_seen = faculty.last_seen
+                safe_faculty.email = getattr(faculty, 'email', '')
+                safe_faculty.ble_id = getattr(faculty, 'ble_id', '')
+                safe_faculty.image_path = getattr(faculty, 'image_path', None)
+                safe_faculty.always_available = getattr(faculty, 'always_available', False)
+                safe_faculty.ntp_sync_status = getattr(faculty, 'ntp_sync_status', 'UNKNOWN')
+                safe_faculty.grace_period_active = getattr(faculty, 'grace_period_active', False)
+                safe_faculty.created_at = getattr(faculty, 'created_at', None)
+                safe_faculty.updated_at = getattr(faculty, 'updated_at', None)
+
+                return safe_faculty
 
             except Exception as e:
                 logger.error(f"Error updating faculty status atomically: {str(e)}")

@@ -66,9 +66,9 @@ class DatabaseManager:
 
         # Statistics and monitoring
         self.stats = ConnectionStats()
-        self.health_check_interval = 30.0  # seconds
+        self.health_check_interval = 120.0  # seconds - increased to reduce conflicts with MQTT
         self.last_health_check = None
-        self.is_healthy = False
+        self.is_healthy = True  # Start as healthy to avoid immediate restarts
 
         # Thread safety
         self.lock = threading.RLock()
@@ -322,14 +322,15 @@ class DatabaseManager:
             }
 
     def _test_connection(self) -> bool:
-        """Test database connection."""
+        """Test database connection using session context for thread safety."""
         try:
-            with self.engine.connect() as conn:
-                result = conn.execute(text("SELECT 1 as health_check"))
+            # Use session context for thread-safe testing
+            with self.get_session_context() as session:
+                result = session.execute(text("SELECT 1 as health_check"))
                 row = result.fetchone()
                 return row and row[0] == 1
         except Exception as e:
-            logger.error(f"Database connection test failed: {e}")
+            logger.debug(f"Database connection test failed: {e}")  # Changed to debug to reduce noise
             return False
 
     def _test_session_health(self, session: Session) -> bool:
@@ -360,7 +361,7 @@ class DatabaseManager:
                         # Try to reinitialize if unhealthy
                         self._reinitialize_engine()
 
-                time.sleep(5.0)  # Check every 5 seconds
+                time.sleep(30.0)  # Check every 30 seconds to reduce conflicts with MQTT
 
             except Exception as e:
                 logger.error(f"Error in database health monitor: {e}")
