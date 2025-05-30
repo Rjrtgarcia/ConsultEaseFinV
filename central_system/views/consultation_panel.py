@@ -582,6 +582,16 @@ class ConsultationHistoryPanel(QFrame):
         if not self.student:
             return
 
+        # Get student ID from either object or dictionary
+        if isinstance(self.student, dict):
+            student_id = self.student.get('id')
+        else:
+            # Legacy support for student objects
+            student_id = getattr(self.student, 'id', None)
+
+        if not student_id:
+            return
+
         try:
             # Import notification utilities
             from ..utils.notification import LoadingDialog, NotificationManager
@@ -601,7 +611,7 @@ class ConsultationHistoryPanel(QFrame):
                 progress_callback(30, "Fetching consultation data...")
 
                 # Get consultations for this student
-                consultations = consultation_controller.get_consultations(student_id=self.student.id)
+                consultations = consultation_controller.get_consultations(student_id=student_id)
 
                 # Update progress
                 progress_callback(80, "Processing results...")
@@ -1082,7 +1092,13 @@ class ConsultationPanel(QTabWidget):
 
         # Update window title with student name
         if student and hasattr(self.parent(), 'setWindowTitle'):
-            self.parent().setWindowTitle(f"ConsultEase - {student.name}")
+            # Handle both student object and student data dictionary
+            if isinstance(student, dict):
+                student_name = student.get('name', 'Student')
+            else:
+                # Legacy support for student objects
+                student_name = getattr(student, 'name', 'Student')
+            self.parent().setWindowTitle(f"ConsultEase - {student_name}")
 
     def set_faculty(self, faculty):
         """

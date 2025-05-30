@@ -611,30 +611,31 @@ class ConsultEaseApp:
             self.login_window.show()
             self.login_window.showFullScreen()  # Force fullscreen again to ensure it takes effect
 
-    def show_dashboard_window(self, student=None):
+    def show_dashboard_window(self, student_data=None):
         """
         Show the dashboard window.
         """
-        self.current_student = student
+        self.current_student = student_data
 
         if self.dashboard_window is None:
             # Create a new dashboard window
-            self.dashboard_window = DashboardWindow(student)
+            self.dashboard_window = DashboardWindow(student_data)
             self.dashboard_window.change_window.connect(self.handle_window_change)
             self.dashboard_window.consultation_requested.connect(self.handle_consultation_request)
         else:
             # Update student info and reinitialize the UI
-            logger.info(f"Updating dashboard with new student: {student.name if student else 'None'}")
+            student_name = student_data.get('name', 'None') if student_data else 'None'
+            logger.info(f"Updating dashboard with new student: {student_name}")
 
-            # Store the new student reference
-            self.dashboard_window.student = student
+            # Store the new student data
+            self.dashboard_window.student = student_data
 
             # Reinitialize the UI to update the welcome message and other student-specific elements
             self.dashboard_window.init_ui()
 
             # Update the consultation panel with the new student
             if hasattr(self.dashboard_window, 'consultation_panel'):
-                self.dashboard_window.consultation_panel.set_student(student)
+                self.dashboard_window.consultation_panel.set_student(student_data)
                 self.dashboard_window.consultation_panel.refresh_history()
 
         # Populate faculty grid with fresh data
@@ -703,7 +704,8 @@ class ConsultEaseApp:
             self.dashboard_window.showFullScreen()  # Force fullscreen to ensure it takes effect
 
         # Log that we've shown the dashboard
-        logger.info(f"Showing dashboard for student: {student.name if student else 'Unknown'}")
+        student_name = student_data.get('name', 'Unknown') if student_data else 'Unknown'
+        logger.info(f"Showing dashboard for student: {student_name}")
 
     def show_admin_login_window(self):
         """
@@ -817,20 +819,21 @@ class ConsultEaseApp:
         else:
             logger.info(f"Login window not visible, RFID scan not forwarded: {rfid_uid}")
 
-    def handle_student_authenticated(self, student):
+    def handle_student_authenticated(self, student_data):
         """
         Handle student authentication event.
 
         Args:
-            student (Student): Authenticated student
+            student_data (dict): Authenticated student data dictionary
         """
-        logger.info(f"Student authenticated: {student.name if student else 'Unknown'}")
+        student_name = student_data.get('name', 'Unknown') if student_data else 'Unknown'
+        logger.info(f"Student authenticated: {student_name}")
 
-        # Store the current student
-        self.current_student = student
+        # Store the current student data
+        self.current_student = student_data
 
         # Show the dashboard window
-        self.show_dashboard_window(student)
+        self.show_dashboard_window(student_data)
 
     def handle_admin_authenticated(self, credentials):
         """
@@ -895,6 +898,19 @@ class ConsultEaseApp:
             logger.error("Cannot request consultation: no student authenticated")
             return
 
+        # Get student ID from either object or dictionary
+        if isinstance(self.current_student, dict):
+            student_id = self.current_student.get('id')
+            student_name = self.current_student.get('name', 'Unknown')
+        else:
+            # Legacy support for student objects
+            student_id = getattr(self.current_student, 'id', None)
+            student_name = getattr(self.current_student, 'name', 'Unknown')
+
+        if not student_id:
+            logger.error("Cannot request consultation: student ID not available")
+            return
+
         # Handle both Faculty object and dictionary
         if isinstance(faculty, dict):
             faculty_name = faculty['name']
@@ -903,11 +919,11 @@ class ConsultEaseApp:
             faculty_name = faculty.name
             faculty_id = faculty.id
 
-        logger.info(f"Consultation requested with: {faculty_name}")
+        logger.info(f"Consultation requested by {student_name} with: {faculty_name}")
 
         # Create consultation request using the correct method
         consultation = self.consultation_controller.create_consultation(
-            student_id=self.current_student.id,
+            student_id=student_id,
             faculty_id=faculty_id,
             request_message=message,
             course_code=course_code

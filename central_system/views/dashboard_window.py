@@ -242,7 +242,17 @@ class DashboardWindow(BaseWindow):
 
         # Log student info for debugging
         if student:
-            logger.info(f"Dashboard initialized with student: ID={student.id}, Name={student.name}, RFID={student.rfid_uid}")
+            # Handle both student object and student data dictionary
+            if isinstance(student, dict):
+                student_id = student.get('id', 'Unknown')
+                student_name = student.get('name', 'Unknown')
+                student_rfid = student.get('rfid_uid', 'Unknown')
+            else:
+                # Legacy support for student objects
+                student_id = getattr(student, 'id', 'Unknown')
+                student_name = getattr(student, 'name', 'Unknown')
+                student_rfid = getattr(student, 'rfid_uid', 'Unknown')
+            logger.info(f"Dashboard initialized with student: ID={student_id}, Name={student_name}, RFID={student_rfid}")
         else:
             logger.warning("Dashboard initialized without student information")
 
@@ -259,7 +269,13 @@ class DashboardWindow(BaseWindow):
         header_layout.setContentsMargins(20, 15, 20, 15)
 
         if self.student:
-            welcome_label = QLabel(f"Welcome, {self.student.name}")
+            # Handle both student object and student data dictionary
+            if isinstance(self.student, dict):
+                student_name = self.student.get('name', 'Student')
+            else:
+                # Legacy support for student objects
+                student_name = getattr(self.student, 'name', 'Student')
+            welcome_label = QLabel(f"Welcome, {student_name}")
         else:
             welcome_label = QLabel("Welcome to ConsultEase")
 
@@ -1188,8 +1204,24 @@ class DashboardWindow(BaseWindow):
 
             # Create consultation
             if self.student:
+                # Get student ID from either object or dictionary
+                if isinstance(self.student, dict):
+                    student_id = self.student.get('id')
+                else:
+                    # Legacy support for student objects
+                    student_id = getattr(self.student, 'id', None)
+
+                if not student_id:
+                    logger.error("Cannot create consultation: student ID not available")
+                    QMessageBox.warning(
+                        self,
+                        "Consultation Request",
+                        "Unable to submit consultation request. Student information is incomplete."
+                    )
+                    return
+
                 consultation = consultation_controller.create_consultation(
-                    student_id=self.student.id,
+                    student_id=student_id,
                     faculty_id=faculty.id,
                     request_message=message,
                     course_code=course_code

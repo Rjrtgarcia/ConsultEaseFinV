@@ -475,34 +475,58 @@ class LoginWindow(BaseWindow):
         if student:
             # Authentication successful
             self.logger.info(f"Authentication successful for student: {student.name} with ID: {student.id}")
-            self.show_success(f"Welcome, {student.name}!")
+
+            # Convert student object to safe dictionary format to avoid DetachedInstanceError
+            try:
+                student_data = {
+                    'id': student.id,
+                    'name': student.name,
+                    'department': student.department,
+                    'rfid_uid': student.rfid_uid,
+                    'created_at': student.created_at.isoformat() if student.created_at else None,
+                    'updated_at': student.updated_at.isoformat() if student.updated_at else None
+                }
+                self.logger.info(f"Converted student to safe data format: {student_data}")
+            except Exception as e:
+                self.logger.error(f"Error converting student to safe format: {e}")
+                # Fallback to basic data
+                student_data = {
+                    'id': getattr(student, 'id', None),
+                    'name': getattr(student, 'name', 'Unknown'),
+                    'department': getattr(student, 'department', 'Unknown'),
+                    'rfid_uid': getattr(student, 'rfid_uid', ''),
+                    'created_at': None,
+                    'updated_at': None
+                }
+
+            self.show_success(f"Welcome, {student_data['name']}!")
 
             # Log the emission of the signal
-            self.logger.info(f"LoginWindow: Emitting student_authenticated signal for {student.name}")
+            self.logger.info(f"LoginWindow: Emitting student_authenticated signal for {student_data['name']}")
 
-            # Emit the signal to navigate to the dashboard
-            self.student_authenticated.emit(student)
+            # Emit the signal to navigate to the dashboard with safe student data
+            self.student_authenticated.emit(student_data)
 
             # Also emit a change_window signal as a backup
             self.logger.info(f"LoginWindow: Emitting change_window signal for dashboard")
-            self.change_window.emit("dashboard", student)
+            self.change_window.emit("dashboard", student_data)
 
             # Force a delay to ensure the signals are processed
-            QTimer.singleShot(500, lambda: self._force_dashboard_navigation(student))
+            QTimer.singleShot(500, lambda: self._force_dashboard_navigation(student_data))
         else:
             # Authentication failed
             self.logger.warning(f"Authentication failed for RFID: {rfid_uid}")
             self.show_error("RFID card not recognized. Please try again or contact an administrator.")
 
-    def _force_dashboard_navigation(self, student):
+    def _force_dashboard_navigation(self, student_data):
         """
         Force navigation to dashboard as a fallback.
 
         Args:
-            student (object): Student object
+            student_data (dict): Student data dictionary
         """
         self.logger.info("Forcing dashboard navigation as fallback")
-        self.change_window.emit("dashboard", student)
+        self.change_window.emit("dashboard", student_data)
 
     def show_success(self, message):
         """
