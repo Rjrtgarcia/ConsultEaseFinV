@@ -79,7 +79,7 @@ class FacultyController:
             topic (str): MQTT topic
             data (dict or str): Status update data
         """
-        logger.info(f"Received MQTT status update - Topic: {topic}, Data: {data}")
+        logger.info(f"🔄 MQTT STATUS UPDATE - Topic: {topic}, Data: {data}, Type: {type(data)}")
 
         faculty_id = None
         status = None
@@ -258,21 +258,28 @@ class FacultyController:
 
             # Get status from data
             if isinstance(data, dict):
+                logger.info(f"📊 Processing dict data for faculty {faculty_id}: {data}")
+
                 # Handle enhanced status data from updated faculty desk units
                 if 'present' in data:
                     status = bool(data.get('present'))
+                    logger.info(f"✅ Found 'present' field: {data.get('present')} -> status: {status}")
                 elif 'status' in data:
                     status_str = data.get('status', '').lower()
+                    logger.info(f"📝 Found 'status' field: {status_str}")
                     if status_str in ['available', 'present', 'true']:
                         status = True
                     elif status_str in ['away', 'absent', 'false']:
                         status = False
                     else:
                         status = bool(data.get('status', False))
+                    logger.info(f"✅ Processed status string '{status_str}' -> status: {status}")
                 else:
                     status = False
+                    logger.warning(f"⚠️ No 'present' or 'status' field found in data, defaulting to False")
 
                 faculty_name = data.get('faculty_name')
+                logger.info(f"👤 Faculty name from data: {faculty_name}")
 
                 # Extract enhanced status information
                 ntp_sync_status = data.get('ntp_sync_status', 'UNKNOWN')
@@ -303,13 +310,19 @@ class FacultyController:
 
         # If we couldn't determine faculty ID or status, return
         if faculty_id is None or status is None:
-            logger.error(f"Could not determine faculty ID or status from topic {topic} and data {data}")
+            logger.error(f"❌ Could not determine faculty ID ({faculty_id}) or status ({status}) from topic {topic} and data {data}")
             return
 
-        logger.info(f"Received status update for faculty {faculty_id}: {status}")
+        logger.info(f"🎯 FINAL STATUS UPDATE - Faculty ID: {faculty_id}, Status: {status}, Topic: {topic}")
 
         # Update faculty status in database
+        logger.info(f"💾 Attempting database update for faculty {faculty_id} with status {status}")
         faculty = self.update_faculty_status(faculty_id, status)
+
+        if faculty:
+            logger.info(f"✅ Successfully updated faculty {faculty.name} (ID: {faculty.id}) status to {status}")
+        else:
+            logger.error(f"❌ Failed to update faculty {faculty_id} status in database")
 
         if faculty:
             # Notify consultation queue service about faculty status change
