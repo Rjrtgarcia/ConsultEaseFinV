@@ -223,7 +223,7 @@ class DashboardWindow(BaseWindow):
         # Set up smart refresh manager for optimized faculty status updates
         self.smart_refresh = SmartRefreshManager(base_interval=180000, max_interval=600000)
         self.refresh_timer = QTimer(self)
-        self.refresh_timer.timeout.connect(self.refresh_faculty_status)
+        self.refresh_timer.timeout.connect(self._refresh_faculty_status_timer)
         self.refresh_timer.start(180000)  # Start with 3 minutes
 
         # UI performance utilities
@@ -1021,6 +1021,18 @@ class DashboardWindow(BaseWindow):
             logger.error(f"Error filtering faculty: {str(e)}")
             self.show_notification("Error filtering faculty list", "error")
 
+    def _refresh_faculty_status_timer(self):
+        """
+        Timer-triggered refresh method that calls the main refresh method.
+        This separates timer-based refreshes from manual/MQTT-based refreshes.
+        """
+        try:
+            self.refresh_faculty_status()
+        except Exception as e:
+            logger.error(f"Error in timer-triggered faculty status refresh: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+
     def refresh_faculty_status(self):
         """
         Refresh the faculty status from the server with optimizations to reduce loading indicators.
@@ -1564,7 +1576,7 @@ class DashboardWindow(BaseWindow):
             # Show error message in the faculty grid
             self._show_error_message(f"Error loading faculty data: {str(e)}")
 
-    def refresh_faculty_status(self, faculty_data):
+    def refresh_faculty_status_realtime(self, faculty_data):
         """
         Refresh faculty status in real-time based on MQTT updates.
 

@@ -864,9 +864,9 @@ class ConsultEaseApp:
             logger.info(f"🔄 Real-time faculty status update received: {faculty_data}")
 
             # Update dashboard if it's currently shown
-            if self.dashboard_window and hasattr(self.dashboard_window, 'refresh_faculty_status'):
+            if self.dashboard_window and hasattr(self.dashboard_window, 'refresh_faculty_status_realtime'):
                 logger.info("📱 Updating dashboard with new faculty status")
-                self.dashboard_window.refresh_faculty_status(faculty_data)
+                self.dashboard_window.refresh_faculty_status_realtime(faculty_data)
             else:
                 logger.debug("Dashboard not available for real-time update")
 

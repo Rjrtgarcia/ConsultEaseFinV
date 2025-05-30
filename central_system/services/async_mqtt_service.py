@@ -77,9 +77,14 @@ class AsyncMQTTService:
         self._initialize_client()
 
     def _initialize_client(self):
-        """Initialize MQTT client with callbacks."""
+        """Initialize MQTT client with callbacks and enhanced error handling."""
         try:
-            self.client = mqtt.Client()
+            # Create client with clean session and protocol version specification
+            self.client = mqtt.Client(
+                client_id=f"consultease_central_{int(time.time())}",
+                clean_session=True,
+                protocol=mqtt.MQTTv311  # Use MQTT 3.1.1 for better compatibility
+            )
 
             # Set authentication if provided
             if self.username and self.password:
@@ -91,12 +96,19 @@ class AsyncMQTTService:
             self.client.on_message = self._on_message
             self.client.on_publish = self._on_publish
 
-            # Configure client options for reliability
+            # Configure client options for reliability and error prevention
             self.client.reconnect_delay_set(min_delay=1, max_delay=120)
             self.client.max_inflight_messages_set(20)
             self.client.max_queued_messages_set(100)
 
-            logger.debug("MQTT client initialized")
+            # Set socket options to prevent connection issues
+            self.client.socket_timeout = 60
+            self.client.keepalive = 60
+
+            # Enable message ordering and duplicate detection
+            self.client.message_retry_set(5)  # Retry failed messages up to 5 times
+
+            logger.debug("MQTT client initialized with enhanced configuration")
 
         except Exception as e:
             logger.error(f"Error initializing MQTT client: {e}")
@@ -129,20 +141,53 @@ class AsyncMQTTService:
             logger.info("MQTT client disconnected")
 
     def _on_message(self, client, userdata, msg):
-        """Handle incoming MQTT messages."""
+        """Handle incoming MQTT messages with enhanced error handling."""
         try:
             self.messages_received += 1
             topic = msg.topic
 
-            # Decode payload
+            # Validate message structure
+            if not hasattr(msg, 'payload') or msg.payload is None:
+                logger.warning(f"Received message with no payload on topic: {topic}")
+                return
+
+            # Decode payload with multiple fallback strategies
             try:
+                # Try UTF-8 decoding first
                 payload = msg.payload.decode('utf-8')
-                data = json.loads(payload)
-            except json.JSONDecodeError:
-                # If not JSON, treat as string
-                data = payload
+
+                # Validate payload is not empty or just whitespace
+                if not payload or payload.isspace():
+                    logger.debug(f"Received empty payload on topic: {topic}")
+                    return
+
+                # Try to parse as JSON
+                try:
+                    data = json.loads(payload)
+                except json.JSONDecodeError:
+                    # If not JSON, treat as string but validate it's printable
+                    if all(ord(c) < 128 and (c.isprintable() or c.isspace()) for c in payload):
+                        data = payload.strip()
+                    else:
+                        logger.warning(f"Received non-printable string payload on topic {topic}")
+                        return
+
             except UnicodeDecodeError:
-                logger.error(f"Failed to decode message payload for topic {topic}")
+                # Try alternative encodings
+                try:
+                    payload = msg.payload.decode('latin-1')
+                    logger.warning(f"Used latin-1 fallback decoding for topic {topic}")
+                    data = payload.strip()
+                except Exception:
+                    logger.error(f"Failed to decode message payload for topic {topic} with any encoding")
+                    return
+            except Exception as decode_error:
+                logger.error(f"Unexpected error decoding payload for topic {topic}: {decode_error}")
+                return
+
+            # Additional validation for data
+            if data is None:
+                logger.debug(f"Processed payload resulted in None for topic: {topic}")
                 return
 
             # Find matching handler
@@ -154,7 +199,9 @@ class AsyncMQTTService:
                 logger.debug(f"No handler found for topic: {topic}")
 
         except Exception as e:
-            logger.error(f"Error processing MQTT message: {e}")
+            logger.error(f"Error processing MQTT message for topic {getattr(msg, 'topic', 'unknown')}: {e}")
+            import traceback
+            logger.error(f"MQTT message processing traceback: {traceback.format_exc()}")
 
     def _on_publish(self, client, userdata, mid):
         """Handle successful message publication."""
@@ -361,7 +408,7 @@ class AsyncMQTTService:
         self.last_batch_time = 0
 
     def _publish_worker(self):
-        """Background worker for publishing messages."""
+        """Background worker for publishing messages with enhanced validation."""
         while self.running:
             try:
                 # Get message from queue with timeout
@@ -372,25 +419,71 @@ class AsyncMQTTService:
                     self.publish_errors += 1
                     continue
 
-                # Prepare payload
-                if isinstance(message['data'], str):
-                    payload = message['data']
-                else:
-                    payload = json.dumps(message['data'])
+                # Validate message structure
+                if not message or 'topic' not in message or 'data' not in message:
+                    logger.error("Invalid message structure in publish queue")
+                    self.publish_errors += 1
+                    continue
 
-                # Publish message
-                result = self.client.publish(
-                    message['topic'],
-                    payload,
-                    qos=message['qos'],
-                    retain=message['retain']
-                )
+                topic = message['topic']
+                data = message['data']
 
-                if result.rc == mqtt.MQTT_ERR_SUCCESS:
-                    self.messages_published += 1
-                    logger.debug(f"Published message to {message['topic']}")
-                else:
-                    logger.error(f"Failed to publish to {message['topic']}: {result.rc}")
+                # Validate topic
+                if not topic or not isinstance(topic, str) or len(topic.strip()) == 0:
+                    logger.error(f"Invalid topic: {topic}")
+                    self.publish_errors += 1
+                    continue
+
+                # Prepare and validate payload
+                try:
+                    if isinstance(data, str):
+                        # Validate string payload
+                        if not all(ord(c) < 128 for c in data):
+                            logger.warning(f"Non-ASCII characters in string payload for topic {topic}")
+                            # Convert to safe ASCII
+                            payload = data.encode('ascii', 'ignore').decode('ascii')
+                        else:
+                            payload = data
+                    elif data is None:
+                        payload = ""
+                    else:
+                        # Convert to JSON with error handling
+                        try:
+                            payload = json.dumps(data, ensure_ascii=True, separators=(',', ':'))
+                        except (TypeError, ValueError) as json_error:
+                            logger.error(f"Failed to serialize data to JSON for topic {topic}: {json_error}")
+                            self.publish_errors += 1
+                            continue
+
+                    # Final payload validation
+                    if len(payload.encode('utf-8')) > 268435455:  # MQTT max payload size
+                        logger.error(f"Payload too large for topic {topic}: {len(payload)} bytes")
+                        self.publish_errors += 1
+                        continue
+
+                except Exception as payload_error:
+                    logger.error(f"Error preparing payload for topic {topic}: {payload_error}")
+                    self.publish_errors += 1
+                    continue
+
+                # Publish message with additional error checking
+                try:
+                    result = self.client.publish(
+                        topic,
+                        payload,
+                        qos=message.get('qos', 1),
+                        retain=message.get('retain', False)
+                    )
+
+                    if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                        self.messages_published += 1
+                        logger.debug(f"Published message to {topic}")
+                    else:
+                        logger.error(f"Failed to publish to {topic}: MQTT error code {result.rc}")
+                        self.publish_errors += 1
+
+                except Exception as publish_error:
+                    logger.error(f"Exception during publish to {topic}: {publish_error}")
                     self.publish_errors += 1
 
             except Empty:
@@ -398,6 +491,8 @@ class AsyncMQTTService:
                 continue
             except Exception as e:
                 logger.error(f"Error in publish worker: {e}")
+                import traceback
+                logger.error(f"Publish worker traceback: {traceback.format_exc()}")
                 self.publish_errors += 1
 
     def _connection_monitor(self):

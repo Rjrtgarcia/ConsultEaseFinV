@@ -91,24 +91,34 @@ class FacultyController:
 
     def handle_faculty_status_update(self, topic, data):
         """
-        Handle faculty status update from MQTT.
+        Handle faculty status update from MQTT with enhanced error handling.
 
         Args:
             topic (str): MQTT topic
             data (dict or str): Status update data
         """
-        logger.info(f"🔄 MQTT STATUS UPDATE - Topic: {topic}, Data: {data}, Type: {type(data)}")
+        try:
+            logger.info(f"🔄 MQTT STATUS UPDATE - Topic: {topic}, Data: {data}, Type: {type(data)}")
 
-        faculty_id = None
-        status = None
-        faculty_name = None
+            # Validate input parameters
+            if not topic or not isinstance(topic, str):
+                logger.error(f"Invalid topic received: {topic}")
+                return
 
-        # Handle different topic formats
-        if topic.endswith("/mac_status"):
-            # This is a MAC address status update from the faculty desk unit
-            # Extract faculty ID from topic: consultease/faculty/{faculty_id}/mac_status
-            try:
-                faculty_id = int(topic.split("/")[2])
+            if data is None:
+                logger.warning(f"Received None data for topic: {topic}")
+                return
+
+            faculty_id = None
+            status = None
+            faculty_name = None
+
+            # Handle different topic formats
+            if topic.endswith("/mac_status"):
+                # This is a MAC address status update from the faculty desk unit
+                # Extract faculty ID from topic: consultease/faculty/{faculty_id}/mac_status
+                try:
+                    faculty_id = int(topic.split("/")[2])
 
                 if isinstance(data, dict):
                     status_str = data.get("status", "")
@@ -391,6 +401,13 @@ class FacultyController:
                 publish_mqtt_message(MQTTTopics.SYSTEM_NOTIFICATIONS, notification)
             except Exception as e:
                 logger.error(f"Error publishing faculty status notification: {str(e)}")
+        else:
+            logger.error(f"❌ Failed to process faculty status update for topic: {topic}")
+
+        except Exception as e:
+            logger.error(f"Unexpected error in handle_faculty_status_update: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
 
     def update_faculty_status(self, faculty_id, status):
         """
