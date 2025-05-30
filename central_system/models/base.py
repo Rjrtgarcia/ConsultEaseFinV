@@ -67,12 +67,18 @@ pool_recycle = config.get('database.pool_recycle', 1800)  # Recycle connections 
 
 # Create engine with connection pooling
 if DB_TYPE.lower() == 'sqlite':
-    # SQLite doesn't support the same level of connection pooling
+    # SQLite configuration - use StaticPool for thread safety
+    from sqlalchemy.pool import StaticPool
     engine = create_engine(
         DATABASE_URL,
-        connect_args={"check_same_thread": False}  # Allow SQLite to be used across threads
+        poolclass=StaticPool,  # Use StaticPool for SQLite
+        connect_args={
+            "check_same_thread": False,  # Allow SQLite to be used across threads
+            "timeout": 20  # Connection timeout
+        },
+        pool_pre_ping=True  # Check connection validity before using it
     )
-    logger.info("Created SQLite engine with thread safety enabled")
+    logger.info("Created SQLite engine with StaticPool and thread safety enabled")
 else:
     # PostgreSQL with full connection pooling
     engine = create_engine(

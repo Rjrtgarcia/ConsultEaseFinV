@@ -354,10 +354,11 @@ class FacultyController:
 
         with self._status_locks[lock_key]:
             try:
-                db = get_db()
+                # Use database manager for thread-safe operations
+                from ..services.database_manager import get_database_manager
+                db_manager = get_database_manager()
 
-                # Start a database transaction for atomic operations
-                with db.begin():
+                with db_manager.get_session_context() as db:
                     # Use SELECT FOR UPDATE to lock the row and prevent concurrent modifications
                     faculty = db.query(Faculty).filter(Faculty.id == faculty_id).with_for_update().first()
 
@@ -383,23 +384,31 @@ class FacultyController:
                     else:
                         faculty.version += 1
 
-                    # Commit the transaction
-                    db.commit()
-
                     logger.info(f"Atomically updated status for faculty {faculty.name} (ID: {faculty.id}): {previous_status} -> {status}")
+
+                    # Create a safe faculty data dictionary to avoid DetachedInstanceError
+                    faculty_data = {
+                        'id': faculty.id,
+                        'name': faculty.name,
+                        'department': faculty.department,
+                        'status': faculty.status,
+                        'last_seen': faculty.last_seen.isoformat() if faculty.last_seen else None,
+                        'version': getattr(faculty, 'version', 1)
+                    }
 
                 # Invalidate faculty cache when status changes (outside transaction)
                 invalidate_faculty_cache()
                 invalidate_cache_pattern("get_all_faculty")
 
                 # Publish MQTT notification with sequence number to ensure ordering
-                self._publish_status_update_with_sequence(faculty, status, previous_status)
+                self._publish_status_update_with_sequence_safe(faculty_data, status, previous_status)
 
                 return faculty
 
             except Exception as e:
                 logger.error(f"Error updating faculty status atomically: {str(e)}")
-                db.rollback()
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 return None
 
     def _publish_status_update_with_sequence(self, faculty, new_status, previous_status):
@@ -434,6 +443,50 @@ class FacultyController:
             topics = [
                 MQTTTopics.SYSTEM_NOTIFICATIONS,
                 f"consultease/faculty/{faculty.id}/status_update"
+            ]
+
+            for topic in topics:
+                try:
+                    publish_mqtt_message(topic, notification)
+                    logger.debug(f"Published status update to {topic} with sequence {self._message_sequence}")
+                except Exception as e:
+                    logger.error(f"Error publishing to {topic}: {str(e)}")
+
+        except Exception as e:
+            logger.error(f"Error publishing faculty status notification: {str(e)}")
+
+    def _publish_status_update_with_sequence_safe(self, faculty_data, new_status, previous_status):
+        """
+        Publish faculty status update with sequence number for message ordering using safe faculty data.
+
+        Args:
+            faculty_data (dict): Safe faculty data dictionary
+            new_status: New status value
+            previous_status: Previous status value
+        """
+        try:
+            # Generate sequence number for message ordering
+            if not hasattr(self, '_message_sequence'):
+                self._message_sequence = 0
+
+            self._message_sequence += 1
+
+            # Create notification with sequence number and timestamp
+            notification = {
+                'type': 'faculty_status',
+                'faculty_id': faculty_data['id'],
+                'faculty_name': faculty_data['name'],
+                'status': new_status,
+                'previous_status': previous_status,
+                'sequence': self._message_sequence,
+                'timestamp': faculty_data.get('last_seen'),
+                'version': faculty_data.get('version', 1)
+            }
+
+            # Publish to both standardized and legacy topics for compatibility
+            topics = [
+                MQTTTopics.SYSTEM_NOTIFICATIONS,
+                f"consultease/faculty/{faculty_data['id']}/status_update"
             ]
 
             for topic in topics:
