@@ -359,8 +359,25 @@ class FacultyController:
             # Notify consultation queue service about faculty status change
             self.queue_service.update_faculty_status(faculty_id, status)
 
-            # Notify callbacks
-            self._notify_callbacks(faculty)
+            # Create safe faculty data for callbacks to prevent DetachedInstanceError
+            safe_faculty_data = {
+                'id': faculty.id,
+                'name': faculty.name,
+                'department': faculty.department,
+                'status': faculty.status,
+                'last_seen': faculty.last_seen.isoformat() if faculty.last_seen else None,
+                'email': faculty.email,
+                'phone': faculty.phone,
+                'office_location': faculty.office_location,
+                'specialization': faculty.specialization,
+                'consultation_hours': faculty.consultation_hours,
+                'is_active': faculty.is_active,
+                'created_at': faculty.created_at.isoformat() if faculty.created_at else None,
+                'updated_at': faculty.updated_at.isoformat() if faculty.updated_at else None
+            }
+
+            # Notify callbacks with safe data
+            self._notify_callbacks(safe_faculty_data)
 
             # Publish a notification about faculty availability using async MQTT
             try:

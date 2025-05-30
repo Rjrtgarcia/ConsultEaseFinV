@@ -383,6 +383,33 @@ class DatabaseManager:
             logger.debug(f"Session health check failed: {e}")
             return False
 
+    def _test_health_check(self) -> bool:
+        """
+        Test database health using session context for ongoing health monitoring.
+        This is different from _test_connection which is used during initialization.
+        """
+        try:
+            if not self.is_initialized:
+                logger.debug("Database manager not initialized, skipping health check")
+                return False
+
+            # Use session context for health check during normal operation
+            with self.get_session_context() as session:
+                result = session.execute(text("SELECT 1 as health_check"))
+                row = result.fetchone()
+                success = row and row[0] == 1
+
+                if success:
+                    logger.debug("✅ Database health check passed")
+                else:
+                    logger.warning("⚠️ Database health check failed - invalid result")
+
+                return success
+
+        except Exception as e:
+            logger.warning(f"⚠️ Database health check failed: {e}")
+            return False
+
     def _health_monitor_loop(self):
         """Health monitoring loop."""
         while self.monitoring_enabled:
@@ -393,7 +420,7 @@ class DatabaseManager:
                 if (not self.last_health_check or
                     current_time - self.last_health_check >= timedelta(seconds=self.health_check_interval)):
 
-                    self.is_healthy = self._test_connection()
+                    self.is_healthy = self._test_health_check()
                     self.last_health_check = current_time
 
                     if not self.is_healthy:
@@ -627,8 +654,23 @@ class DatabaseManager:
 
             if self.engine:
                 logger.info(f"   🏊 Pool class: {type(self.engine.pool).__name__}")
-                logger.info(f"   🔗 Pool size: {getattr(self.engine.pool, 'size', 'N/A')()}")
-                logger.info(f"   📊 Pool status: checked_in={getattr(self.engine.pool, 'checkedin', lambda: 'N/A')()}, checked_out={getattr(self.engine.pool, 'checkedout', lambda: 'N/A')()}")
+                try:
+                    pool_size = getattr(self.engine.pool, 'size', None)
+                    if callable(pool_size):
+                        pool_size = pool_size()
+                    logger.info(f"   🔗 Pool size: {pool_size}")
+                except Exception as e:
+                    logger.info(f"   🔗 Pool size: N/A ({e})")
+
+                try:
+                    checked_in = getattr(self.engine.pool, 'checkedin', None)
+                    checked_out = getattr(self.engine.pool, 'checkedout', None)
+                    if callable(checked_in) and callable(checked_out):
+                        logger.info(f"   📊 Pool status: checked_in={checked_in()}, checked_out={checked_out()}")
+                    else:
+                        logger.info(f"   📊 Pool status: N/A (StaticPool doesn't track connections)")
+                except Exception as e:
+                    logger.info(f"   📊 Pool status: N/A ({e})")
 
             # Check database file if SQLite
             if self.database_url.startswith('sqlite'):
