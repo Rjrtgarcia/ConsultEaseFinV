@@ -118,9 +118,7 @@ class DatabaseManager:
                         pool_pre_ping=True,  # Validate connections before use
                         echo=False,  # Set to True for SQL debugging
                         pool_reset_on_return='commit',  # Reset connections on return
-                        # Add connection pool configuration for better stability
-                        pool_recycle=3600,  # Recycle connections every hour
-                        pool_timeout=30,  # Timeout for getting connection from pool
+                        # Note: pool_timeout, pool_recycle are not valid for StaticPool with SQLite
                     )
                     logger.info("✅ Created SQLite engine with StaticPool and thread safety")
                 else:
